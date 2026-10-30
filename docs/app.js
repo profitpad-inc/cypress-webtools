@@ -2,6 +2,13 @@
 (function () {
   var API_BASE = 'https://n8n.profitpad.com/webhook/cypress-webtools';
   var PORTAL_ID = '22691627';
+  // The round robin list in HubSpot (the Zap's legacy list 276; the API knows it as 378)
+  var LIST_URL = 'https://app.hubspot.com/contacts/' + PORTAL_ID + '/objectLists/378/filters';
+  // Pages live in folders (report/, settings/, book/) so URLs have no .html; data-base="../" on <body>.
+  var BASE = (document.body && document.body.getAttribute('data-base')) || '';
+  var TOOLS = [['report', 'Report', 'report/'], ['settings', 'Settings', 'settings/']];
+  var EXT_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M5 2H2v8h8V7M7 1h4v4M11 1 5.5 6.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>';
+  var CARET = '<svg class="tools__caret" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z" fill="currentColor"/></svg>';
 
   function api(method, path, body) {
     var opts = { method: method, headers: {} };
@@ -154,6 +161,49 @@
     }
   }
 
+  // The #333 header bar (same layout as Fairbank's initHeader()): mark, Tools menu, HubSpot list link.
+  // Sign-in comes later; its user menu will sit right of the links.
+  function header(current) {
+    var h = document.createElement('header');
+    h.className = 'hdr';
+    h.innerHTML =
+      '<div class="hdr__start">' +
+        '<a class="hdr__logo" href="' + BASE + 'report/"><img src="' + BASE + 'favicon.png" alt="Cypress" width="26" height="26"><span class="hdr__title">Lead Assignment</span></a>' +
+        '<div class="tools"><button type="button" class="tools__btn" aria-haspopup="true" aria-expanded="false">Tools' + CARET + '</button>' +
+          '<div class="tools__panel" hidden>' + TOOLS.map(function (t) {
+            var on = t[0] === current;
+            return '<a class="tools__item' + (on ? ' tools__item--on' : '') + '" href="' + BASE + t[2] + '"' + (on ? ' aria-current="page"' : '') + '>' + esc(t[1]) + '</a>';
+          }).join('') + '</div></div>' +
+      '</div>' +
+      '<div class="hdr__end">' +
+        '<a class="hdr__link" href="' + LIST_URL + '" target="_blank" rel="noopener">Round robin list' + EXT_ICON + '</a>' +
+      '</div>';
+    document.body.insertBefore(h, document.body.firstChild);
+
+    var btn = h.querySelector('.tools__btn');
+    var panel = h.querySelector('.tools__panel');
+    var setOpen = function (open) { panel.hidden = !open; btn.setAttribute('aria-expanded', open ? 'true' : 'false'); };
+    btn.addEventListener('click', function () { setOpen(panel.hidden); });
+    document.addEventListener('click', function (e) { if (!panel.hidden && !h.querySelector('.tools').contains(e.target)) setOpen(false); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !panel.hidden) { setOpen(false); btn.focus(); } });
+
+    // Phones: hide on a scroll down past the bar, show again on a scroll up.
+    var lastY = window.scrollY;
+    window.addEventListener('scroll', function () {
+      var y = window.scrollY;
+      if (y <= h.offsetHeight) h.classList.remove('hdr--hidden');
+      else if (y - lastY > 4) h.classList.add('hdr--hidden');
+      else if (lastY - y > 4) h.classList.remove('hdr--hidden');
+      else return;
+      lastY = y;
+    }, { passive: true });
+  }
+
+  // The universal booking link (book/ next to the other pages).
+  function bookUrl() {
+    return new URL(BASE + 'book/', location.href).href;
+  }
+
   var toastTimer = null;
   function toast(msg, bad) {
     var el = document.getElementById('toast');
@@ -165,9 +215,9 @@
       document.body.appendChild(el);
     }
     el.textContent = msg;
-    el.className = 'toast show' + (bad ? ' bad' : '');
+    el.className = 'toast toast--show' + (bad ? ' toast--bad' : '');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.className = 'toast' + (bad ? ' bad' : ''); }, bad ? 5000 : 2500);
+    toastTimer = setTimeout(function () { el.className = 'toast' + (bad ? ' toast--bad' : ''); }, bad ? 5000 : 2500);
   }
 
   window.CW = {
@@ -175,5 +225,6 @@
     dayString: dayString, parseDay: parseDay, addDays: addDays, timeZone: timeZone, contactUrl: contactUrl,
     isAway: isAway, awayLater: awayLater, isPaused: isPaused, rotation: rotation, nextUp: nextUp,
     owners: owners, ownerNamer: ownerNamer, sourceText: sourceText, toast: toast,
+    header: header, bookUrl: bookUrl, LIST_URL: LIST_URL, EXT_ICON: EXT_ICON,
   };
 })();

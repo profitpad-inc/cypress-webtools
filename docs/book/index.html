@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Book a meeting | Cypress</title>
+  <link rel="icon" href="../favicon.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body data-base="../">
+  <!--
+    The universal round robin booking link. Customer-facing, so no header bar.
+    ?email= (HubSpot: ?email={{ contact.email }}) or ?cid= (contact id) sends a known contact to their owner's
+    meeting link; anyone else goes to the next rep in the rotation. The n8n book flow decides and logs the visit.
+  -->
+  <main class="book">
+    <div class="card" id="box">
+      <img src="../favicon.png" alt="">
+      <h1>Finding the right person for you</h1>
+      <p><span class="spinner"></span>&nbsp; Opening their calendar&hellip;</p>
+    </div>
+  </main>
+  <script src="../app.js"></script>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var q = [];
+      ['email', 'cid'].forEach(function (k) {
+        var v = (params.get(k) || '').trim();
+        // an unfilled HubSpot token ({{ contact.email }}) is not an email
+        if (v && v.indexOf('{{') < 0) q.push(k + '=' + encodeURIComponent(v));
+      });
+      function fail(msg) {
+        document.getElementById('box').innerHTML = '<img src="../favicon.png" alt=""><h1>Sorry, booking isn\'t available right now</h1>' +
+          '<p>' + CW.esc(msg) + '</p><button class="btn" type="button" onclick="location.reload()">Try again</button>';
+      }
+      function go() {
+        CW.api('GET', 'book' + (q.length ? '?' + q.join('&') : '')).then(function (d) {
+          if (!d.url) return fail('Please try again in a little while.');
+          location.replace(d.url);
+        }).catch(function (e) {
+          fail(e.status === 503 ? 'Nobody is available to book at the moment. Please try again later.' : 'Please try again in a little while.');
+        });
+      }
+      // Chrome prerenders pages it expects you to open (typing in the address bar, hovering a link) and runs their
+      // scripts then. Each call moves the rotation, so wait until the page is really shown (2026-10-30: every visit
+      // was logged twice, the first with Sec-Purpose: prefetch;prerender).
+      if (document.prerendering) document.addEventListener('prerenderingchange', go, { once: true });
+      else go();
+    })();
+  </script>
+</body>
+</html>

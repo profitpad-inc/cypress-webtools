@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS cypress_rr_settings (
   skip_if_owned boolean NOT NULL DEFAULT true,
   last_rep_id integer,
   last_position integer,
-  list_id text NOT NULL DEFAULT '276',
+  list_id text NOT NULL DEFAULT '378',
   list_after text,
   list_last_join_at timestamptz,
   list_initialized boolean NOT NULL DEFAULT false,
@@ -62,6 +62,23 @@ CREATE TABLE IF NOT EXISTS cypress_rr_overwrites (
   UNIQUE (assignment_id, changed_at)
 );
 CREATE INDEX IF NOT EXISTS cypress_rr_overwrites_changed ON cypress_rr_overwrites (changed_at);
+-- visits to the universal booking link and where each was sent
+CREATE TABLE IF NOT EXISTS cypress_rr_bookings (
+  id bigserial PRIMARY KEY,
+  email text NOT NULL DEFAULT '',
+  contact_id text,
+  contact_name text NOT NULL DEFAULT '',
+  owner_id text,
+  rep_id integer,
+  rep_name text NOT NULL DEFAULT '',
+  url text NOT NULL DEFAULT '',
+  route text NOT NULL,
+  reason text NOT NULL DEFAULT '',
+  skipped jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cypress_rr_bookings_created ON cypress_rr_bookings (created_at);
+CREATE INDEX IF NOT EXISTS cypress_rr_bookings_email ON cypress_rr_bookings (email, created_at);
 INSERT INTO cypress_rr_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 INSERT INTO cypress_rr_reps (hs_owner_id, name, email, enabled, position) VALUES
   ('78305435', 'Jeff Bauer', 'jeffb@cypressvending.ca', true, 1),
@@ -70,6 +87,8 @@ INSERT INTO cypress_rr_reps (hs_owner_id, name, email, enabled, position) VALUES
   ('742548153', 'Matt A', 'matta@cypressvending.ca', true, 4),
   ('78033913', 'Mac Mills', 'mackenziem@cypressvending.ca', false, 5)
 ON CONFLICT (hs_owner_id) DO NOTHING;
+-- HubSpot's v3 API knows the Zap's legacy list 276 as list 378 (idmapping checked 2026-10-30)
+UPDATE cypress_rr_settings SET list_id = '378' WHERE id = 1 AND list_id = '276';
 -- the Zap's counter was 4391 (mod 4 = 3, Matt A), so Jeff Bauer is next
 UPDATE cypress_rr_settings
 SET last_rep_id = (SELECT id FROM cypress_rr_reps WHERE hs_owner_id = '742548153'), last_position = 4
@@ -78,4 +97,6 @@ SELECT
   (SELECT count(*) FROM cypress_rr_reps) AS reps,
   (SELECT count(*) FROM cypress_rr_settings) AS settings,
   (SELECT count(*) FROM cypress_rr_assignments) AS assignments,
-  (SELECT count(*) FROM cypress_rr_overwrites) AS overwrites;
+  (SELECT count(*) FROM cypress_rr_overwrites) AS overwrites,
+  (SELECT count(*) FROM cypress_rr_bookings) AS bookings,
+  (SELECT list_id FROM cypress_rr_settings WHERE id = 1) AS list_id;

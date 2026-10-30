@@ -5,28 +5,35 @@
 ## 1. What this is
 
 A demo webtool, pitched to Cypress Vending (HubSpot portal 22691627), that replaces their Zapier round robin. It assigns
-each new lead in HubSpot list 276 to the next rep, and gives them:
+each new lead in the HubSpot round robin list to the next rep, and gives them:
 - a **report** of who got each lead and why, and who changed the owner afterwards (Calendly, a user, a workflow) and when;
 - **time off** per rep (out from / back on, with a reason), skipped automatically;
 - a global **pause** (until a time, or until resumed);
-- a **settings** page to add reps from HubSpot users, paste a meeting link, turn reps on or off, and reorder them.
+- a **settings** page to add reps from HubSpot users, paste a meeting link, turn reps on or off, and reorder them;
+- a **universal booking link** (`book/`) that opens the right rep's meeting link (§7).
+
+**List ids:** the round robin list is "[Zap Trigger] Contact Owner Round Robin", a MANUAL list. The Zap and the old
+v1 API call it 276; HubSpot's v3 API and the UI call it **378** (`GET /crm/v3/lists/idmapping?legacyListId=276`
+answered `listId 378`, 2026-10-30; UI link `https://app.hubspot.com/contacts/22691627/objectLists/378/filters`). Use 378
+everywhere. `/crm/v3/lists/276/...` reads a different list (7,379 members); 378 had 4,487 members on 2026-10-30.
 
 The old Zap is in `archive/round_robin_zap.json`: list 276 trigger, Zapier table counter `MOD(counter, 4)`, set
 `hubspot_owner_id`, log to the "cypress - audits" Google Sheet. All its steps except the trigger are paused.
 
-Decisions (user, 2026-10-30): poll list 276 (no HubSpot webhook); owner changes after assignment are **kept and logged**,
+Decisions (user, 2026-10-30): poll the list (no HubSpot webhook); owner changes after assignment are **kept and logged**,
 never reverted; **no sign-in** for the demo.
 
 ## 2. Status
 
 | Piece | Status |
 |---|---|
-| Tables in `demo_db` | **Created and seeded** 2026-10-30 (5 reps, settings row). Next lead goes to Jeff Bauer, continuing the Zap's order |
+| Tables in `demo_db` | **Created and seeded** 2026-10-30 (5 reps, settings row; `cypress_rr_bookings` and `list_id` 378 added by a second `setup-db` run the same day). Next lead goes to Jeff Bauer, continuing the Zap's order. The user has since pasted Calendly links for Jeff, Pat, Graham and Matt |
 | `state`, `owners`, `rep`, `settings`, `report` webhooks | **Live and tested** with curl (add, duplicate add 409, update with commas, remove, reorder, pause, resume, bad input 400, report). Test values were reverted |
+| `book` | **Live and tested** 2026-10-30: no email went to the rotation, `jeffb@cypressvending.ca` (a HubSpot contact owned by Graham) went to Graham's link. The two test rows were deleted and the pointer put back on Matt A |
 | `rr-watch-overwrites` | **Live** (every 5 min). Has nothing to read until `rr-assign` runs. Not yet seen against real owner history |
 | `rr-assign` | **Deployed, not published** (it writes owners in Cypress's live HubSpot). Needs the user's go-ahead. Never run yet |
 | `setup-db` | Run once 2026-10-30, then unpublished. Held by `deploy_flows.py` |
-| Site (`docs/`) | **Written, not hosted.** Scripts syntax-checked, helpers tested in node. Not opened in a browser (AGENTS rule). GitHub Pages needs a repo and a push, which wait for the user |
+| Site (`docs/`) | **Restyled 2026-10-30** to Fairbank order placement's light look (§7). Scripts syntax-checked, helpers tested in node. Not opened in a browser (AGENTS rule). The first version is pushed to `profitpad-inc/cypress-webtools`; the user is enabling GitHub Pages (`/docs` on `main`). The restyle is not committed yet |
 | HubSpot scopes | `crm.objects.owners.read` and `crm.lists.read` added by the user 2026-10-30 (owners now load: 10 active owners). Contacts read works. **Unverified:** contacts write (`crm.objects.contacts.write`), needed by `rr-assign` |
 
 ## 3. Layout
@@ -39,7 +46,10 @@ cypress-webtools/
   build_flows.py                 wires flows_src/ into n8n-flows/*.json (deterministic node ids)
   n8n-flows/                     generated flow JSON (with n8n ids written back by the deploy)
   deploy_flows.py                deploys n8n-flows/ to n8n.profitpad.com via the REST API (.env: N8N_API_KEY)
-  docs/                          static site for GitHub Pages: index.html (report), settings.html, app.js, styles.css
+  docs/                          static site for GitHub Pages (one folder per page, so URLs have no .html)
+    index.html                   redirect to ./report/
+    report/, settings/, book/    each an index.html; links point at the folder (../settings/)
+    app.js, styles.css, favicon.png   shared; pages set <body data-base="../">
 ```
 
 Workflow: edit `flows_src/` or `build_flows.py`, then `/usr/bin/python3 build_flows.py`, `/usr/bin/python3 deploy_flows.py --dry-run`,
@@ -60,8 +70,10 @@ Request node as predefined type `hubspotApi`), Postgres `0STT9QiFVsbUyNQG` (`dem
 | `owners` | `1E3bp2djD6QQhonZ` | GET `owners` | `{owners: [{id, userId, name, email}]}`, active HubSpot owners |
 | `rep` | `wbBQvvOlRLw4IULs` | POST `rep` | `{action: add, hs_owner_id, hs_user_id, name, email, meeting_link}`, `{action: update, id, meeting_link?, enabled?, away_from?, away_until?, away_reason?}` (empty string clears), `{action: remove, id}`, `{action: order, order: [ids]}`. Answers the new state; 400 bad input, 409 owner already listed |
 | `settings` | `A8nmAN7FmXLTjXXu` | POST `settings` | `{paused?, paused_until?, pause_reason?, skip_if_owned?}`. Answers the new state |
-| `report` | `pr9qZ5ozedhSTkxn` | GET `report?from&to&tz` | Assignments created in the range (each with its `overwrites`), overwrites that happened in the range, reps, settings. Range max 92 days |
+| `report` | `pr9qZ5ozedhSTkxn` | GET `report?from&to&tz` | Assignments created in the range (each with its `overwrites`), overwrites that happened in the range, booking link visits, reps, settings. Range max 92 days |
+| `book` | `LA5IQQSRKyw5fafT` | GET `book?email=` or `?cid=` | Universal booking link (§7.1). Answers `{url, rep_name, route}`, or 503 `{error}` when nobody is available. Logs the visit; moves the rotation pointer on a `rotation` route. Reads HubSpot only |
 | `rr-assign` | `75DXhqjVfROOi6k6` | every 2 min | See §5 |
+| `book` | **Live and tested** 2026-10-30: no email went to the rotation, `jeffb@cypressvending.ca` (a HubSpot contact owned by Graham) went to Graham's link. The two test rows were deleted and the pointer put back on Matt A |
 | `rr-watch-overwrites` | `B1iPRK3B9hhbCnqv` | every 5 min | Latest assignment per contact in the last 30 days (assigned or kept), batch-reads `hubspot_owner_id` with history, records each change after the assignment time (from, to, `sourceType`, `sourceId`, `sourceLabel`, `updatedByUserId`). Changes nothing in HubSpot |
 | `setup-db` | `WdkXyPiTf7DBHOEo` | POST `setup-db` | `flows_src/setup.sql`, idempotent. Unpublished |
 
@@ -71,8 +83,8 @@ commas in text can't split the n8n query parameter list. Checked live 2026-10-30
 ## 5. Round robin logic (`rr-assign`)
 
 1. Load settings, reps, and contact ids already assigned around the last join time.
-2. Read list 276 with `GET /crm/v3/lists/276/memberships/join-order?limit=250`. **HubSpot returns members newest first**
-   (checked 2026-10-30: 250 of 250 descending; the list has 7,379 members; newest join then was 2026-10-19). The HTTP node
+2. Read the list with `GET /crm/v3/lists/378/memberships/join-order?limit=250` (`list_id` setting). **HubSpot returns
+   members newest first** (checked 2026-10-30: 250 of 250 descending on v3 list 276, a different list, and the first 3 on 378). The HTTP node
    follows `paging.next.link` and stops once a page reaches `list_last_join_at`. The `after` token comes back already
    URL-encoded, so the node uses HubSpot's own `link`.
 3. **First run is a baseline:** reads one page, stores the newest join time, assigns nothing. So turning it on doesn't
@@ -93,11 +105,13 @@ Away semantics: out from the start of "Out from" (viewer's local midnight) until
 - `cypress_rr_reps`: rep per HubSpot owner (`hs_owner_id` unique), `meeting_link`, `enabled`, `position`, `away_from`,
   `away_until`, `away_reason`.
 - `cypress_rr_settings` (one row, id 1): `paused`, `paused_until`, `pause_reason`, `skip_if_owned` (default true),
-  `last_rep_id`, `last_position`, `list_id` (276), `list_last_join_at`, `list_initialized`, `last_poll_at`,
+  `last_rep_id`, `last_position`, `list_id` (378), `list_last_join_at`, `list_initialized`, `last_poll_at`,
   `last_poll_error`. `list_after` is unused (left from the first design).
 - `cypress_rr_assignments`: one row per list join: contact, previous owner, owner, rep, `status`
   (`assigned`, `kept_existing`, `paused`, `no_reps`, `error`), `reason` (plain English), `skipped` jsonb.
 - `cypress_rr_overwrites`: owner changes after an assignment, `UNIQUE (assignment_id, changed_at)`.
+- `cypress_rr_bookings`: one row per booking link visit: email, contact, owner, rep, url, `route` (`owner`, `rotation`,
+  `repeat`, `none`), `reason`, `skipped`.
 
 Seed (from the Zapier "Round Robin" table): Jeff Bauer 78305435, Pat Nicastro 97798186, Graham Patt 481206057, Matt A
 742548153 (on, in that order), Mac Mills 78033913 (off: index 9 never came up in `MOD(counter, 4)`; his owner id is not
@@ -105,25 +119,57 @@ among HubSpot's active owners). HubSpot spells Graham's owner name "Gramham Patt
 
 ## 7. Site
 
-Static, no build. `docs/app.js` has `API_BASE` and the portal id. HubSpot look: Lexend Deca, HubSpot's slate, orange
-(`#ff7a59`) and teal palette. Report: date / quick ranges, KPIs, leads table with reason and later owner changes,
-per-rep counts, owner changes table, banners (paused, reps out, waiting for first sync, sync errors or stale). Settings:
-pause / resume, skip-if-owned switch, rotation (order, on/off, meeting link saved on change, time off, remove, "next"
-badge mirroring the Plan logic), add rep from HubSpot owners.
+Static, no build, light only. Clean URLs like Fairbank's site: each page is a folder with an `index.html` and links
+point at folders (`../settings/`), so GitHub Pages serves `/cypress-webtools/report/` with no `.html`. `docs/app.js` holds
+`API_BASE`, the portal id, `LIST_URL` (list 378 in HubSpot) and `CW.header()`.
+
+**Look** (2026-10-30, on request: "style it similar to fairbank-sales/docs/order-placement"): copied from that page's
+light theme (`html[data-theme="light"]` in its `styles.css`): page #f5f8fa, white cards with a #dfe3eb border, 12px
+corners and a faint shadow, Lexend Deca in sentence case, text #33475b, headings #213343, teal links #0091ae and focus
+ring #00bda5, dark teal pill primary buttons #1c484a (hover #275f61), white outlined pill secondary buttons, 6px inputs.
+**Header bar** is a copy of Fairbank's `initHeader()` bar (#333, 40px, sticky; hides on scroll down on phones): the
+favicon (`favicon.png`, from `https://22691627.fs1.hubspotusercontent-na1.net/hubfs/22691627/nb-favicon.png`, the
+"Wanna bite?" bubble) and "Lead Assignment" left, a Tools menu (Report, Settings), and a "Round robin list" link to
+HubSpot on the right. No user menu yet: sign-in comes later and will sit right of that link.
+
+- **Report** (`report/`): date / quick ranges, KPIs (incl. booking link visits), leads with reason and later owner
+  changes, by-rep counts (leads, changed later, bookings), owner changes, booking link visits, banners (paused, reps
+  out, waiting for first sync, sync errors or stale).
+- **Settings** (`settings/`): pause / resume, skip-if-owned switch, rotation (order, on/off, meeting link saved on
+  change, time off, remove, "Next" badge mirroring the Plan logic; reps without a link are flagged as skipped by the
+  booking link), the booking link card (`#booking`, copy buttons), add rep from HubSpot owners. Links to the HubSpot list.
+
+### 7.1 Universal booking link (`book/`)
+
+`https://profitpad-inc.github.io/cypress-webtools/book/` (assuming the default Pages domain). In HubSpot emails:
+`.../book/?email={{ contact.email }}` (an unfilled `{{` token is ignored). Customer-facing page, no header: it calls the
+`book` flow and `location.replace()`s to the answer. Decision (`flows_src/book-decide.js`):
+1. same email within a day and that rep still has a link and isn't out: same rep (`repeat`), so a double click doesn't
+   skip anyone;
+2. a HubSpot contact whose owner is a listed rep with a link who isn't out: their owner (`owner`); this ignores the rep's
+   on/off switch, which only controls new leads;
+3. anyone else: the next enabled rep in the shared rotation who isn't out and has a link (`rotation`), moving the same
+   pointer `rr-assign` uses; the reason says why (new visitor, no owner, owner out, owner without a link);
+4. nobody: 503 and a "try again later" page (`none`).
+The scheduler is prefilled: Calendly gets `email` and `name`, HubSpot meetings get `email`, `firstName`, `lastName`.
+
+**Prerender:** Chrome prerenders pages while the URL is typed (or a link is hovered) and runs their scripts, which
+logged every visit twice and moved the rotation twice (seen 2026-10-30 in the `book` executions: each pair had one call
+with `Sec-Purpose: prefetch;prerender`). The page now waits for `prerenderingchange` when `document.prerendering` is
+true. Not yet rechecked in a browser.
 
 ## 8. Next steps
 
 1. User: OK to publish `rr-assign` (`/usr/bin/python3 deploy_flows.py --publish rr-assign`), and turn off the Zap's
    trigger at the same time so both don't assign. Then check the first run set the baseline.
-2. Repo: local git (branch `main`) is linked to `https://github.com/profitpad-inc/cypress-webtools` (empty as of
-   2026-10-30). Nothing committed yet; commit and push only when the user says. Then enable
-   GitHub Pages from the `/docs` folder of the default branch. Pages on a private repo needs a paid GitHub plan.
+2. Repo: `https://github.com/profitpad-inc/cypress-webtools` (private), branch `main`, first commit pushed
+   2026-10-30. Commit and push only when the user says. The user is enabling GitHub Pages from `/docs` on `main`
+   (Pages on a private repo needs a paid GitHub plan; unverified whether the org has one).
 3. Open the site in a browser once hosted (not done yet).
 
 ## 9. Open items
 
-- What the meeting link is for beyond storing and showing it (for example a single booking link that routes to the
-  lead's assigned rep) is not built.
+- Booking link visitors without an email always go to the rotation, so anonymous repeat clicks each move it.
 - Leads that arrive while paused are logged, not assigned later.
 - No sign-in: anyone with the URL or webhook paths can change the rotation.
 - The Zap's unused calendar branch (match an existing meeting organizer to the owner) is not ported.

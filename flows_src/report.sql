@@ -22,6 +22,10 @@ SELECT json_build_object(
       WHERE o.changed_at >= b.t0 AND o.changed_at < b.t1
     ) y
   ), '[]'::json),
+  'bookings', COALESCE((
+    SELECT json_agg(k ORDER BY k.created_at DESC) FROM cypress_rr_bookings k, b
+    WHERE k.created_at >= b.t0 AND k.created_at < b.t1
+  ), '[]'::json),
   'reps', COALESCE((SELECT json_agg(r ORDER BY r.position, r.id) FROM cypress_rr_reps r), '[]'::json),
   'settings', (SELECT row_to_json(s) FROM cypress_rr_settings s WHERE s.id = 1)
 ) AS body;

@@ -5,7 +5,7 @@
     "executionOrder": "v1"
   },
   "meta": {
-    "description": "Round robin: every 2 minutes, assigns contacts that joined HubSpot list 276 since the last poll and records why. Writes contact owners in Cypress's live HubSpot."
+    "description": "Round robin: every 2 minutes, assigns contacts that joined the round robin list (378) since the last poll and records why. Writes contact owners in Cypress's live HubSpot."
   },
   "nodes": [
     {

@@ -164,8 +164,29 @@ def report():
   f.save()
 
 
+def book():
+  f = Flow("book", "Universal booking link: ?email= (or ?cid=) goes to the contact owner's meeting link, anyone else to "
+                   "the next rep in the rotation with a link. Logs each visit. Reads HubSpot only.")
+  f.chain(f.webhook("GET", "book"), f.code("Validate", "book-validate.js", 240),
+          f.sql("Load", "book-load.sql", 480, param=B64, keep_going=False),
+          f.if_("Has contact?", "={{ $('Validate').first().json.hasContact }}", 720))
+  f.hubspot("HubSpot: contact", {
+    "resource": "objects", "objectType": "0-1", "operation": "get",
+    "objectId": "={{ $('Validate').first().json.cid || $('Validate').first().json.email }}",
+    "properties": ["firstname", "lastname", "email", "hubspot_owner_id"],
+    "additionalOptions": {"idProperty": "={{ $('Validate').first().json.cid ? 'hs_object_id' : 'email' }}", "errorWhenNotFound": False},
+  }, 960, -100)
+  f.link("Has contact?", "HubSpot: contact")
+  f.link("Has contact?", f.code("Decide", "book-decide.js", 1200), 1)
+  f.link("HubSpot: contact", "Decide")
+  f.chain("Decide", f.sql("Save", "book-save.sql", 1440, param=B64),
+          f.respond(1680, body="={{ JSON.stringify($('Decide').first().json.body) }}",
+                    code="={{ $('Decide').first().json.statusCode }}"))
+  f.save()
+
+
 def rr_assign():
-  f = Flow("rr-assign", "Round robin: every 2 minutes, assigns contacts that joined HubSpot list 276 since the last poll "
+  f = Flow("rr-assign", "Round robin: every 2 minutes, assigns contacts that joined the round robin list (378) since the last poll "
                         "and records why. Writes contact owners in Cypress's live HubSpot.")
   f.schedule(2)
   f.sql("Load state", "assign-load.sql", 240, keep_going=False)
@@ -237,5 +258,5 @@ def rr_watch_overwrites():
 
 if __name__ == "__main__":
   os.makedirs(OUT, exist_ok=True)
-  for build in (setup_db, state, owners, rep, settings, report, rr_assign, rr_watch_overwrites):
+  for build in (setup_db, state, owners, rep, settings, report, book, rr_assign, rr_watch_overwrites):
     build()
