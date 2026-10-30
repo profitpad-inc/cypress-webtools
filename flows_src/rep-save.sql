@@ -15,6 +15,7 @@ changed AS (
     away_from = CASE WHEN p.j ? 'away_from' THEN NULLIF(p.j->>'away_from', '')::timestamptz ELSE r.away_from END,
     away_until = CASE WHEN p.j ? 'away_until' THEN NULLIF(p.j->>'away_until', '')::timestamptz ELSE r.away_until END,
     away_reason = CASE WHEN p.j ? 'away_reason' THEN COALESCE(p.j->>'away_reason', '') ELSE r.away_reason END,
+    boost_remaining = CASE WHEN p.j ? 'boost_remaining' THEN (p.j->>'boost_remaining')::int ELSE r.boost_remaining END,
     updated_at = now()
   FROM p WHERE p.j->>'action' = 'update' AND r.id = (p.j->>'id')::int
   RETURNING r.id

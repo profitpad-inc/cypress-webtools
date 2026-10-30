@@ -1,6 +1,9 @@
 // book: picks the meeting link. A known contact goes to their owner (if that rep has a link and isn't out); anyone
-// else gets the next rep in the shared rotation who has a meeting link, which moves the rotation like a new lead.
-// The same email within a day goes back to the same rep, so a double click doesn't skip anyone.
+// else gets the rep who is next in the shared rotation and has a meeting link. Visits never move the rotation or use
+// a boost: only a lead that rr-assign really assigns does (2026-10-30, on request), so every visitor goes to whoever
+// is next until a lead is assigned. The same email within a day goes back to the same rep.
+// Boost (2026-10-30, on request: "booking links also are impacted by boost"): a boosted rep (on, not out, has a link,
+// boost_remaining > 0; the one with most left first) is "next", so visitors go to them while the boost lasts.
 const encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');
 
 function isAway(rep, now) {
@@ -19,34 +22,48 @@ function startIndex(rotation, settings) {
 }
 
 // prefill the scheduler: Calendly takes name and email, HubSpot meetings take email, firstName and lastName
+// Built by hand: n8n's Code node sandbox has no URL class (2026-10-30: new URL() threw there, so links went out bare).
 function withPrefill(link, contact) {
-  if (!contact || !contact.email) return link;
-  let u;
-  try { u = new URL(link); } catch (e) { return link; }
-  u.searchParams.set('email', contact.email);
-  if (/calendly\.com$/i.test(u.hostname)) {
+  if (!contact || !(contact.email || contact.firstname || contact.lastname)) return link;
+  const m = /^(https?:\/\/([^\/?#]+)([^?#]*))(\?[^#]*)?(#.*)?$/i.exec(String(link || ''));
+  if (!m) return link;
+  const [, base, host, path, query = '', hash = ''] = m;
+  const set = {};
+  if (contact.email) set.email = contact.email;
+  if (/(^|\.)calendly\.com$/i.test(host)) {
     const name = [contact.firstname, contact.lastname].filter(Boolean).join(' ');
-    if (name) u.searchParams.set('name', name);
-  } else if (/hubspot/i.test(u.hostname) || /\/meetings\//.test(u.pathname)) {
-    if (contact.firstname) u.searchParams.set('firstName', contact.firstname);
-    if (contact.lastname) u.searchParams.set('lastName', contact.lastname);
+    if (name) set.name = name;
+  } else if (/hubspot/i.test(host) || /\/meetings\//.test(path)) {
+    if (contact.firstname) set.firstName = contact.firstname;
+    if (contact.lastname) set.lastName = contact.lastname;
   }
-  return u.toString();
+  if (!Object.keys(set).length) return link;
+  // keep the link's own parameters, minus any we're about to set
+  const kept = query.replace(/^\?/, '').split('&').filter((kv) => kv && !(decodeURIComponent(kv.split('=')[0]) in set));
+  const added = Object.keys(set).map((k) => k + '=' + encodeURIComponent(set[k]));
+  return base + '?' + kept.concat(added).join('&') + hash;
 }
 
-function decide({ now, settings, reps, contact, recent, email }) {
+function decide({ now, settings, reps, contact, recent, email, given }) {
+  // what the scheduler gets prefilled with: names and email from the link first, else from HubSpot
+  given = given || {};
+  const prefill = {
+    email: email || contact?.email || '',
+    firstname: given.firstname || contact?.firstname || '',
+    lastname: given.lastname || contact?.lastname || '',
+  };
   const repById = new Map(reps.map((r) => [r.id, r]));
   const repByOwner = new Map(reps.map((r) => [String(r.hs_owner_id), r]));
   const base = {
     email: email || contact?.email || '',
     contact_id: contact?.id || null,
-    contact_name: [contact?.firstname, contact?.lastname].filter(Boolean).join(' '),
+    contact_name: [prefill.firstname, prefill.lastname].filter(Boolean).join(' '),
     owner_id: contact?.owner || null,
     skipped: [],
   };
   const pick = (rep, route, reason, extra) => ({
     ...base, ...extra, rep_id: rep.id, rep_name: rep.name, rep_position: rep.position,
-    url: withPrefill(rep.meeting_link, contact), route, reason,
+    url: withPrefill(rep.meeting_link, prefill), route, reason,
   });
 
   if (recent) {
@@ -74,6 +91,13 @@ function decide({ now, settings, reps, contact, recent, email }) {
   }
 
   const rotation = reps.filter((r) => r.enabled).sort((a, b) => a.position - b.position || a.id - b.id);
+  const boosted = rotation
+    .filter((r) => Number(r.boost_remaining) > 0 && r.meeting_link && !isAway(r, now))
+    .sort((a, b) => b.boost_remaining - a.boost_remaining || a.position - b.position)[0];
+  if (boosted) {
+    const n = Number(boosted.boost_remaining);
+    return pick(boosted, 'boost', `${lead}${boosted.name} is boosted (${n} boosted ${n === 1 ? 'lead' : 'leads'} left).`);
+  }
   const start = startIndex(rotation, settings);
   const skipped = [];
   for (let step = 1; step <= rotation.length; step++) {
@@ -96,7 +120,8 @@ if ($('HubSpot: contact').isExecuted) {
     contact = { id: String(c.id), email: p.email || v.email, firstname: p.firstname || '', lastname: p.lastname || '', owner: p.hubspot_owner_id || null };
   }
 }
-const out = decide({ now: Date.now(), settings: state.settings, reps: state.reps || [], contact, recent: state.recent, email: v.email });
+const out = decide({ now: Date.now(), settings: state.settings, reps: state.reps || [], contact, recent: state.recent, email: v.email,
+  given: { firstname: v.firstname, lastname: v.lastname } });
 return {
   "p": encode(out),
   "statusCode": out.url ? 200 : 503,

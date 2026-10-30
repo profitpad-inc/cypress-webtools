@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS cypress_rr_bookings (
 );
 CREATE INDEX IF NOT EXISTS cypress_rr_bookings_created ON cypress_rr_bookings (created_at);
 CREATE INDEX IF NOT EXISTS cypress_rr_bookings_email ON cypress_rr_bookings (email, created_at);
+-- boost (2026-10-30): a rep takes the next N leads ahead of the rotation
+ALTER TABLE cypress_rr_reps ADD COLUMN IF NOT EXISTS boost_remaining integer NOT NULL DEFAULT 0;
+ALTER TABLE cypress_rr_assignments ADD COLUMN IF NOT EXISTS boosted boolean NOT NULL DEFAULT false;
 INSERT INTO cypress_rr_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 INSERT INTO cypress_rr_reps (hs_owner_id, name, email, enabled, position) VALUES
   ('78305435', 'Jeff Bauer', 'jeffb@cypressvending.ca', true, 1),

@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="../vendor/flatpickr.min.css">
   <link rel="stylesheet" href="../styles.css">
 </head>
 <body data-base="../">
@@ -25,7 +26,7 @@
           <button type="button" data-range="30">30 days</button>
         </div>
         <button class="icon-btn" id="prev" title="Previous day" aria-label="Previous day">&#9664;</button>
-        <input class="input" type="date" id="day" aria-label="Day">
+        <input type="text" id="day">
         <button class="icon-btn" id="next" title="Next day" aria-label="Next day">&#9654;</button>
       </div>
     </div>
@@ -56,7 +57,7 @@
         <div class="card-head"><div><h2>By rep</h2><p>Leads and booking link visits in this period.</p></div></div>
         <div class="table-wrap" id="by-rep"></div>
       </section>
-      <section class="card card--wide">
+      <section class="card">
         <div class="card-head"><div><h2>Owner changes</h2><p>Changes made after the tool assigned a lead, by when they happened.</p></div></div>
         <div class="table-wrap" id="changes"></div>
       </section>
@@ -71,6 +72,7 @@
     </section>
   </main>
 
+  <script src="../vendor/flatpickr.min.js"></script>
   <script src="../app.js"></script>
   <script>
     (function () {
@@ -91,14 +93,19 @@
         owner: ['tag--ok', 'Their owner'],
         rotation: ['tag--gray', 'Rotation'],
         repeat: ['tag--gray', 'Repeat visit'],
+        boost: ['tag--boost', 'Boosted'],
         none: ['tag--bad', 'Nobody available'],
       };
       var short = { month: 'short', day: 'numeric' };
+      var dayPicker = CW.datePicker(document.getElementById('day'), {
+        label: 'Day',
+        onChange: function (d, str) { if (str && str !== state.to) setRange(str); },
+      });
 
       function setRange(from, to) {
         state.from = from;
         state.to = to || from;
-        document.getElementById('day').value = state.to;
+        if (dayPicker) dayPicker.setDate(state.to, false); else document.getElementById('day').value = state.to;
         var today = CW.dayString(new Date());
         var quick = state.from === state.to
           ? (state.from === today ? 'today' : state.from === CW.addDays(today, -1) ? 'yesterday' : '')
@@ -225,7 +232,7 @@
             return '<tr>' +
               '<td class="nowrap">' + timeCell(a.created_at) + '</td>' +
               '<td>' + contactCell(a.contact_id, a.contact_name, a.contact_email) + '</td>' +
-              '<td><span class="tag ' + st[0] + '">' + esc(st[1]) + '</span></td>' +
+              '<td><span class="tag ' + st[0] + '">' + esc(st[1]) + '</span>' + (a.boosted ? ' <span class="tag tag--boost">Boosted</span>' : '') + '</td>' +
               '<td class="nowrap">' + owner + '</td>' +
               '<td>' + esc(a.reason) + skipped + notes + '</td>' +
             '</tr>';
@@ -247,14 +254,15 @@
         var byOwner = {};
         reps.forEach(function (r) { byOwner[r.hs_owner_id] = r; });
         var n = state.namer;
-        document.getElementById('by-rep').innerHTML = '<table><thead><tr><th>Rep</th><th>Status</th><th class="num">Leads</th><th class="num">Changed later</th><th class="num">Bookings</th></tr></thead><tbody>' +
+        document.getElementById('by-rep').innerHTML = '<table class="compact"><thead><tr><th>Rep</th><th>Status</th><th class="num">Leads</th>' +
+          '<th class="num" title="Leads assigned to them whose owner someone changed later">Changed</th><th class="num">Bookings</th></tr></thead><tbody>' +
           ids.map(function (id) {
             var r = byOwner[id];
             var status = !r ? '<span class="tag tag--off">Removed</span>'
               : !r.enabled ? '<span class="tag tag--off">Off</span>'
               : CW.isAway(r, now) ? '<span class="tag tag--warn">Out until ' + esc(CW.fmtDate(r.away_until, short)) + '</span>'
               : '<span class="tag tag--ok">In rotation</span>';
-            return '<tr><td class="strong">' + esc(r ? r.name : n.owner(id)) + '</td><td>' + status + '</td><td class="num">' + (counts[id] || 0) +
+            return '<tr><td class="strong nowrap">' + esc(r ? r.name : n.owner(id)) + '</td><td>' + status + '</td><td class="num">' + (counts[id] || 0) +
               '</td><td class="num">' + (lost[id] || 0) + '</td><td class="num">' + (booked[id] || 0) + '</td></tr>';
           }).join('') + '</tbody></table>';
       }
@@ -292,7 +300,6 @@
       }
 
       document.getElementById('filter').addEventListener('change', function () { if (state.data) renderLeads(state.data.assignments || []); });
-      document.getElementById('day').addEventListener('change', function (e) { if (e.target.value) setRange(e.target.value); });
       document.getElementById('prev').addEventListener('click', function () { setRange(CW.addDays(state.to, -1)); });
       document.getElementById('next').addEventListener('click', function () { setRange(CW.addDays(state.to, 1)); });
       document.getElementById('quick').addEventListener('click', function (e) {

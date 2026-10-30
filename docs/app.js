@@ -80,7 +80,7 @@
     return 'https://app.hubspot.com/contacts/' + PORTAL_ID + '/record/0-1/' + encodeURIComponent(id);
   }
 
-  // ── rotation (mirrors the rr-assign Plan node) ──────────────────────────
+  // ── rotation (mirrors the rr-assign Plan node, boost included) ──────────────────────────
   function isAway(rep, now) {
     var until = rep.away_until ? Date.parse(rep.away_until) : 0;
     var from = rep.away_from ? Date.parse(rep.away_from) : 0;
@@ -100,6 +100,10 @@
     var rot = rotation(reps);
     if (!rot.length) return null;
     var now = Date.now();
+    // a boosted rep (on, not out) goes first: the one with the most boosted leads left
+    var boosted = rot.filter(function (r) { return r.boost_remaining > 0 && !isAway(r, now); })
+      .sort(function (a, b) { return b.boost_remaining - a.boost_remaining || a.position - b.position; })[0];
+    if (boosted) return boosted;
     var start = -1;
     for (var i = 0; i < rot.length; i++) if (rot[i].id === settings.last_rep_id) start = i;
     if (start < 0 && settings.last_position != null) {
@@ -199,6 +203,32 @@
     }, { passive: true });
   }
 
+  // Date picker: Flatpickr set up like Fairbank's order placement (vendor/flatpickr 4.6.13). The real input keeps
+  // YYYY-MM-DD (or YYYY-MM-DD HH:MM with time); people see "Oct 26, 2026" in a box with a calendar icon. Read the
+  // chosen moment from fp.selectedDates[0], not the input text (Safari can't parse "2026-11-02 14:00").
+  function datePicker(el, opts) {
+    if (!window.flatpickr) return null;
+    opts = opts || {};
+    var time = !!opts.time;
+    var fp = window.flatpickr(el, {
+      dateFormat: time ? 'Y-m-d H:i' : 'Y-m-d',
+      altInput: true,
+      altFormat: time ? 'M j, Y h:i K' : 'M j, Y',
+      altInputClass: 'input date-alt',
+      enableTime: time,
+      defaultDate: opts.value || undefined,
+      defaultHour: 9,
+      minDate: opts.minDate || null,
+      disableMobile: true, // keep the themed calendar on phones
+      onChange: function (dates, str) { if (opts.onChange) opts.onChange(dates[0] || null, str, fp); },
+    });
+    if (fp.altInput) {
+      if (opts.label) fp.altInput.setAttribute('aria-label', opts.label);
+      if (opts.placeholder) fp.altInput.setAttribute('placeholder', opts.placeholder);
+    }
+    return fp;
+  }
+
   // The universal booking link (book/ next to the other pages).
   function bookUrl() {
     return new URL(BASE + 'book/', location.href).href;
@@ -225,6 +255,6 @@
     dayString: dayString, parseDay: parseDay, addDays: addDays, timeZone: timeZone, contactUrl: contactUrl,
     isAway: isAway, awayLater: awayLater, isPaused: isPaused, rotation: rotation, nextUp: nextUp,
     owners: owners, ownerNamer: ownerNamer, sourceText: sourceText, toast: toast,
-    header: header, bookUrl: bookUrl, LIST_URL: LIST_URL, EXT_ICON: EXT_ICON,
+    header: header, bookUrl: bookUrl, datePicker: datePicker, LIST_URL: LIST_URL, EXT_ICON: EXT_ICON,
   };
 })();

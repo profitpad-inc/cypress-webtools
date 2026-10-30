@@ -48,6 +48,11 @@ function validate(body) {
       return fail(400, 'The return date has to be after the start date.');
     }
     if ('away_reason' in b) payload.away_reason = clean(b.away_reason);
+    if ('boost_remaining' in b) {
+      const n = Number(b.boost_remaining);
+      if (!Number.isInteger(n) || n < 0 || n > 100) return fail(400, 'The boost has to be a whole number of leads from 0 to 100.');
+      payload.boost_remaining = n;
+    }
     return { ok: true, payload };
   }
 

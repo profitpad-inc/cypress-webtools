@@ -68,10 +68,10 @@ Request node as predefined type `hubspotApi`), Postgres `0STT9QiFVsbUyNQG` (`dem
 |---|---|---|---|
 | `state` | `zZ3bBMrc92hANtCy` | GET `state` | `{reps, settings, now}` |
 | `owners` | `1E3bp2djD6QQhonZ` | GET `owners` | `{owners: [{id, userId, name, email}]}`, active HubSpot owners |
-| `rep` | `wbBQvvOlRLw4IULs` | POST `rep` | `{action: add, hs_owner_id, hs_user_id, name, email, meeting_link}`, `{action: update, id, meeting_link?, enabled?, away_from?, away_until?, away_reason?}` (empty string clears), `{action: remove, id}`, `{action: order, order: [ids]}`. Answers the new state; 400 bad input, 409 owner already listed |
+| `rep` | `wbBQvvOlRLw4IULs` | POST `rep` | `{action: add, hs_owner_id, hs_user_id, name, email, meeting_link}`, `{action: update, id, meeting_link?, enabled?, away_from?, away_until?, away_reason?, boost_remaining? (0 to 100)}` (empty string clears), `{action: remove, id}`, `{action: order, order: [ids]}`. Answers the new state; 400 bad input, 409 owner already listed |
 | `settings` | `A8nmAN7FmXLTjXXu` | POST `settings` | `{paused?, paused_until?, pause_reason?, skip_if_owned?}`. Answers the new state |
 | `report` | `pr9qZ5ozedhSTkxn` | GET `report?from&to&tz` | Assignments created in the range (each with its `overwrites`), overwrites that happened in the range, booking link visits, reps, settings. Range max 92 days |
-| `book` | `LA5IQQSRKyw5fafT` | GET `book?email=` or `?cid=` | Universal booking link (§7.1). Answers `{url, rep_name, route}`, or 503 `{error}` when nobody is available. Logs the visit; moves the rotation pointer on a `rotation` route. Reads HubSpot only |
+| `book` | `LA5IQQSRKyw5fafT` | GET `book?email=` or `?cid=` | Universal booking link (§7.1). Answers `{url, rep_name, route}`, or 503 `{error}` when nobody is available. Logs the visit only: never moves the rotation or uses a boost. Reads HubSpot only |
 | `rr-assign` | `75DXhqjVfROOi6k6` | every 2 min | See §5 |
 | `book` | **Live and tested** 2026-10-30: no email went to the rotation, `jeffb@cypressvending.ca` (a HubSpot contact owned by Graham) went to Graham's link. The two test rows were deleted and the pointer put back on Matt A |
 | `rr-watch-overwrites` | `B1iPRK3B9hhbCnqv` | every 5 min | Latest assignment per contact in the last 30 days (assigned or kept), batch-reads `hubspot_owner_id` with history, records each change after the assignment time (from, to, `sourceType`, `sourceId`, `sourceLabel`, `updatedByUserId`). Changes nothing in HubSpot |
@@ -100,18 +100,34 @@ commas in text can't split the n8n query parameter list. Checked live 2026-10-30
 
 Away semantics: out from the start of "Out from" (viewer's local midnight) until the start of "Back on".
 
+**Boost** (2026-10-30, on request: "make that user get the next x number of leads"): `cypress_rr_reps.boost_remaining`
+(0 to 100, set on Settings). After the pause and skip-if-owned checks, a rep who is on, not out of office and has
+`boost_remaining > 0` takes the lead instead of the rotation; with several, the one with the most left goes first, so
+they share. Boosted leads don't move the rotation pointer, so the normal order carries on where it was. The row is saved
+with `boosted = true` and the Save query takes one off per boosted row that really got assigned (a HubSpot refusal
+becomes an `error` row and costs nothing). The booking link follows boosts too (2026-10-30, on request): where it would use the rotation, the boosted rep (who
+also needs a meeting link) gets the visit, route `boost`. Visits don't count a boost down; only assigned leads do.
+
+**Only assigned leads move things** (2026-10-30, on request: "only progress to the next person in the rotation if the
+lead actually got assigned"): the rotation pointer and boost counts change only for `assigned` rows in `rr-assign`.
+Paused, kept-owner, no-rep and error rows don't move them, and booking link visits never do (until 2026-10-30 a
+rotation visit moved the pointer and a boost visit used a boost). So every anonymous visitor goes to whoever is next
+until a lead is really assigned. A visitor who books becomes a lead already owned by that rep (Calendly sets the
+owner); with skip-if-owned on, that's `kept_existing` and doesn't count as their turn. Decided 2026-10-30 (user): leave
+it that way.
+
 ## 6. Database (`demo_db`)
 
-- `cypress_rr_reps`: rep per HubSpot owner (`hs_owner_id` unique), `meeting_link`, `enabled`, `position`, `away_from`,
-  `away_until`, `away_reason`.
+- `cypress_rr_reps`: rep per HubSpot owner (`hs_owner_id` unique), `hs_user_id` (null for the seeded reps),
+  `meeting_link`, `enabled`, `position`, `away_from`, `away_until`, `away_reason`, `boost_remaining`.
 - `cypress_rr_settings` (one row, id 1): `paused`, `paused_until`, `pause_reason`, `skip_if_owned` (default true),
   `last_rep_id`, `last_position`, `list_id` (378), `list_last_join_at`, `list_initialized`, `last_poll_at`,
   `last_poll_error`. `list_after` is unused (left from the first design).
 - `cypress_rr_assignments`: one row per list join: contact, previous owner, owner, rep, `status`
-  (`assigned`, `kept_existing`, `paused`, `no_reps`, `error`), `reason` (plain English), `skipped` jsonb.
+  (`assigned`, `kept_existing`, `paused`, `no_reps`, `error`), `reason` (plain English), `skipped` jsonb, `boosted`.
 - `cypress_rr_overwrites`: owner changes after an assignment, `UNIQUE (assignment_id, changed_at)`.
 - `cypress_rr_bookings`: one row per booking link visit: email, contact, owner, rep, url, `route` (`owner`, `rotation`,
-  `repeat`, `none`), `reason`, `skipped`.
+  `repeat`, `boost`, `none`), `reason`, `skipped`.
 
 Seed (from the Zapier "Round Robin" table): Jeff Bauer 78305435, Pat Nicastro 97798186, Graham Patt 481206057, Matt A
 742548153 (on, in that order), Mac Mills 78033913 (off: index 9 never came up in `MOD(counter, 4)`; his owner id is not
@@ -132,12 +148,26 @@ favicon (`favicon.png`, from `https://22691627.fs1.hubspotusercontent-na1.net/hu
 "Wanna bite?" bubble) and "Lead Assignment" left, a Tools menu (Report, Settings), and a "Round robin list" link to
 HubSpot on the right. No user menu yet: sign-in comes later and will sit right of that link.
 
+**Dates** (2026-10-30, on request: "use the calendar picker used in fairbank"): Flatpickr 4.6.13, copied from
+Fairbank's `docs/order-placement/vendor/` into `docs/vendor/`, with Fairbank's calendar CSS (light values) at the end of
+`styles.css`. `CW.datePicker(el, {time, value, minDate, label, placeholder, onChange})` in `app.js` uses Fairbank's
+options: the real input keeps `YYYY-MM-DD` (`YYYY-MM-DD HH:MM` with time), the visible box shows "Oct 26, 2026" with a
+calendar icon (`.date-alt`), `disableMobile` keeps the themed calendar on phones. Unlike Fairbank, the boxes can't be
+typed in (tap to open). Used for the report's day, Pause until (with time, from today) and time off (Back on can't be
+before the day after Out from). Not checked in a browser.
+
 - **Report** (`report/`): date / quick ranges, KPIs (incl. booking link visits), leads with reason and later owner
   changes, by-rep counts (leads, changed later, bookings), owner changes, booking link visits, banners (paused, reps
   out, waiting for first sync, sync errors or stale).
-- **Settings** (`settings/`): pause / resume, skip-if-owned switch, rotation (order, on/off, meeting link saved on
-  change, time off, remove, "Next" badge mirroring the Plan logic; reps without a link are flagged as skipped by the
-  booking link), the booking link card (`#booking`, copy buttons), add rep from HubSpot owners. Links to the HubSpot list.
+- **Settings** (`settings/`): pause / resume (2026-10-30, on request: a "Pause assignment" button in the card head;
+  Pause until and Reason open below only after it's clicked; while paused, the card says until when and why, with
+  Resume now). The skip-if-owned switch was removed from the page the same day, on request ("remove this setting for
+  now"); `skip_if_owned` stays true in the database (checked 2026-10-30), so leads that already have an owner keep them,
+  and the `settings` endpoint still accepts it. Rotation (order, on/off, meeting link saved on
+  change, **Working hours** link to `https://app.hubspot.com/settings/22691627/users/user/{hs_user_id}?tab=preferencesTab&subtab=workingHours`
+  (user id from the rep row, else from the owners list; hidden when unknown, e.g. Mac Mills, who isn't an active owner),
+  **Boost** (number of next leads, End boost; "Boosted: N left" tag), time off, remove, "Next" badge mirroring the Plan logic; reps without a link are flagged as skipped by the
+  booking link), the booking link card (`#booking`, copy buttons), add rep from HubSpot owners (since 2026-10-30, on request, an **Add rep** button in the Rotation card's footer, bottom left, that opens the search and meeting link fields in place, with Cancel; the separate "Add a rep" card is gone). Next to it, **Edit order** shows the up / down arrows column and each rep's Remove (both hidden otherwise) and turns into **Done** (2026-10-30, on request). Links to the HubSpot list.
 
 ### 7.1 Universal booking link (`book/`)
 
@@ -148,10 +178,18 @@ HubSpot on the right. No user menu yet: sign-in comes later and will sit right o
    skip anyone;
 2. a HubSpot contact whose owner is a listed rep with a link who isn't out: their owner (`owner`); this ignores the rep's
    on/off switch, which only controls new leads;
-3. anyone else: the next enabled rep in the shared rotation who isn't out and has a link (`rotation`), moving the same
-   pointer `rr-assign` uses; the reason says why (new visitor, no owner, owner out, owner without a link);
+3. anyone else: a boosted rep if there is one (`boost`, see §5 Boost), else the next enabled rep in the shared rotation who isn't out and has a link (`rotation`), read from the
+   pointer `rr-assign` uses without moving it; the reason says why (new visitor, no owner, owner out, owner without a link);
 4. nobody: 503 and a "try again later" page (`none`).
 The scheduler is prefilled: Calendly gets `email` and `name`, HubSpot meetings get `email`, `firstName`, `lastName`.
+The values come from the link first (`?email=`, `?firstname=` / `firstName` / `first_name`, `?lastname=` / `lastName` /
+`last_name`; added 2026-10-30, on request), then from the HubSpot contact, so a visitor not in HubSpot is prefilled
+too. Unfilled `{{ }}` tokens are dropped. The visit's name on the report uses the same values.
+Gotchas found 2026-10-30: (1) n8n's Code node sandbox has **no `URL` class**; `withPrefill()` used `new URL()` in a
+try/catch, so every link went out bare until it was rewritten with a regex. Don't use `URL` in Code nodes. (2) A `+` in
+an email (`czbecher+1@gmail.com`) arrives as a space, because `+` means space in a query string; `book-validate.js` turns
+spaces back into `+`. Checked live after the fix: that email (a HubSpot contact owned by Matt A) got Matt's link with
+`email`, `firstName` and `lastName`.
 
 **Prerender:** Chrome prerenders pages while the URL is typed (or a link is hovered) and runs their scripts, which
 logged every visit twice and moved the rotation twice (seen 2026-10-30 in the `book` executions: each pair had one call

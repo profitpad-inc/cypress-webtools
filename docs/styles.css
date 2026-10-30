@@ -110,6 +110,10 @@ h3 { font-size: 14px; font-weight: 600; }
 .split { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; }
 .split > .card { flex: 1; min-width: 300px; }
 .split > .card--wide { flex: 1.6; }
+/* Tighter cells for narrow cards (By rep on the report). */
+.compact th, .compact td { padding-left: 12px; padding-right: 12px; }
+.compact th:first-child, .compact td:first-child { padding-left: 20px; }
+.compact th:last-child, .compact td:last-child { padding-right: 20px; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); font-size: 13px; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -125,6 +129,7 @@ h3 { font-size: 14px; font-weight: 600; }
 }
 .btn--ghost { color: var(--heading); background: #ffffff; border-color: var(--steel); }
 .btn--sm { padding: 6px 12px; font-size: 13px; }
+.btn--link svg { width: 12px; height: 12px; }
 .btn--link { color: var(--accent); background: none; border-color: transparent; padding-left: 6px; padding-right: 6px; font-weight: 500; }
 .btn--danger { color: #c0282f; background: #ffffff; border-color: rgba(217, 54, 62, .45); }
 .btn[disabled] { opacity: .45; cursor: not-allowed; }
@@ -145,6 +150,8 @@ h3 { font-size: 14px; font-weight: 600; }
 /* ── Inputs: gray border, teal ring ── */
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
 .field .faint { font-size: 12px; }
+/* A button beside fields with hints under their boxes: lines up with the boxes (label line + gap; 38px box). */
+.field-btn { margin-top: 27px; min-height: 38px; }
 .input, select.input {
   width: 100%; min-height: 38px; padding: 8px 12px;
   font: 14px 'Lexend Deca', sans-serif; color: var(--text);
@@ -152,7 +159,9 @@ h3 { font-size: 14px; font-weight: 600; }
 }
 .input:hover { border-color: #a9bbcf; }
 .input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px rgba(0, 189, 165, .2); }
-.input[readonly] { background: var(--surface-head); }
+/* background-color, not the shorthand: the date boxes are readonly too and the shorthand reset their icon's
+   no-repeat / position (the icon tiled across a focused box, 2026-10-30). */
+.input[readonly]:not(.date-alt) { background-color: var(--surface-head); }
 
 /* Slider switch */
 .switch { position: relative; display: inline-flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
@@ -182,6 +191,7 @@ h3 { font-size: 14px; font-weight: 600; }
 .tag--bad { color: var(--err-text); background: var(--err-bg); border-color: rgba(217, 54, 62, .35); }
 .tag--changed { color: #a14d00; background: rgba(245, 150, 70, .12); border-color: rgba(214, 110, 20, .5); }
 .tag--off { color: var(--faint); background: #ffffff; border-color: var(--border); }
+.tag--boost { color: #ffffff; background: var(--hs-primary); border-color: var(--hs-primary); }
 .pill-next { margin-left: 8px; padding: 1px 8px; font-size: 12px; font-weight: 600; color: #ffffff; background: var(--hs-primary); border-radius: 999px; vertical-align: 1px; }
 
 /* ── KPIs ── */
@@ -227,11 +237,16 @@ tbody tr:last-child td { border-bottom: 0; }
 .rep td { vertical-align: middle; }
 .rep--off .rep__name { color: var(--faint); }
 .rep__name { font-weight: 500; color: var(--heading); }
+/* Status cell: tags and notes stacked with a gap (In rotation, Boosted, Out dates, no link). */
+.status { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.status .faint { line-height: 1.35; }
 .order { display: inline-flex; flex-direction: column; gap: 3px; }
 .order .icon-btn { width: 26px; height: 18px; font-size: 9px; }
 .link-in { min-width: 240px; }
 .away td { background: var(--surface-head) !important; }
 .away__grid { display: grid; grid-template-columns: 1fr 1fr 2fr auto; gap: 12px; align-items: end; }
+/* Card footer (Rotation: Add rep, Edit order and the add-a-rep form). */
+.card-foot { padding: 14px 20px; border-top: 1px solid var(--border); }
 .divider { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 
 /* ── Copy box (booking link) ── */
@@ -262,6 +277,86 @@ code { padding: 1px 6px; font: 13px ui-monospace, Menlo, monospace; color: var(-
 .book h1 { font-size: 22px; }
 .book p { margin: 8px 0 0; color: var(--muted); }
 .book .btn { margin-top: 20px; }
+
+/* ── Flatpickr calendar (dates) ──
+   Ported from Fairbank order placement (its base rules plus its light-theme
+   overrides). Loaded after vendor/flatpickr.min.css so these rules win. The
+   calendar is appended to <body>. */
+/* Calendar icon on the right of the date box (Flatpickr's text input has none). Muted, teal on focus. */
+.date-alt {
+  cursor: pointer;
+  padding-right: 38px;
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c98b6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='16.5' rx='2'/%3E%3Cpath d='M3 9.5h18M8 2.5v4M16 2.5v4'/%3E%3C/svg%3E");
+}
+.date-alt[readonly] { background-color: #ffffff; }
+.date-alt:focus,
+.date-alt.active {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230091ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='16.5' rx='2'/%3E%3Cpath d='M3 9.5h18M8 2.5v4M16 2.5v4'/%3E%3C/svg%3E");
+}
+.datebar .date-alt { width: 170px; }
+
+/* No padding or border on the outer box: when flatpickr opens the calendar
+   above the field it positions it by the summed height of its children
+   only, so outer padding/border made it overlap the input. The spacing lives
+   on .flatpickr-months / .flatpickr-innerContainer; the outline is a box-shadow. */
+.flatpickr-calendar {
+  font-family: 'Lexend Deca', sans-serif;
+  background: #ffffff;
+  border: 0;
+  border-radius: 0.75rem;
+  box-shadow: 0 0 0 1px var(--border), 0 10px 30px var(--shadow);
+  padding: 0;
+}
+.flatpickr-calendar * { font-family: 'Lexend Deca', sans-serif; letter-spacing: normal; text-transform: none; }
+.flatpickr-innerContainer { padding-bottom: 0.75rem; }
+.flatpickr-calendar.arrowTop:before { border-bottom-color: var(--border); }
+.flatpickr-calendar.arrowTop:after  { border-bottom-color: #ffffff; }
+.flatpickr-calendar.arrowBottom:before { border-top-color: var(--border); }
+.flatpickr-calendar.arrowBottom:after  { border-top-color: #ffffff; }
+/* Padding without touching widths (flatpickr sizes the calendar from the fixed .dayContainer width). */
+.flatpickr-weekdays,
+.dayContainer { padding: 0 0.75rem; box-sizing: border-box; }
+.flatpickr-months { padding: 0.75rem 0.75rem 0; box-sizing: border-box; }
+/* The prev/next arrows sit at top: 0 of .flatpickr-months; move them down by its top padding. */
+.flatpickr-months .flatpickr-prev-month,
+.flatpickr-months .flatpickr-next-month { top: 0.75rem; color: var(--muted); fill: var(--muted); }
+.flatpickr-months .flatpickr-prev-month:hover svg,
+.flatpickr-months .flatpickr-next-month:hover svg { fill: var(--accent-hi); }
+.flatpickr-months .flatpickr-month,
+.flatpickr-current-month .flatpickr-monthDropdown-months,
+.flatpickr-current-month input.cur-year { color: var(--heading); fill: var(--heading); font-weight: 600; }
+.flatpickr-current-month .flatpickr-monthDropdown-months { background: #ffffff; }
+.flatpickr-current-month .flatpickr-monthDropdown-months option { background: #ffffff; color: var(--heading); }
+.flatpickr-current-month .flatpickr-monthDropdown-months:hover,
+.numInputWrapper:hover { background: rgba(0, 145, 174, .1); }
+.numInputWrapper span.arrowUp:after { border-bottom-color: var(--accent-hi); }
+.numInputWrapper span.arrowDown:after { border-top-color: var(--accent-hi); }
+span.flatpickr-weekday { color: var(--muted); font-weight: 600; font-size: 12px; }
+.flatpickr-day { color: var(--text); border-radius: 9999px; }
+.flatpickr-day.prevMonthDay,
+.flatpickr-day.nextMonthDay { color: rgba(81, 111, 144, .45); }
+.flatpickr-day.flatpickr-disabled,
+.flatpickr-day.flatpickr-disabled:hover { color: rgba(81, 111, 144, .3); background: none; border-color: transparent; }
+.flatpickr-day:hover,
+.flatpickr-day:focus { background: rgba(0, 145, 174, .1); border-color: transparent; }
+.flatpickr-day.today { border-color: var(--accent); color: var(--accent-hi); }
+.flatpickr-day.today:hover,
+.flatpickr-day.today:focus { background: rgba(0, 145, 174, .15); border-color: var(--accent); color: var(--heading); }
+.flatpickr-day.selected,
+.flatpickr-day.selected:hover,
+.flatpickr-day.selected:focus,
+.flatpickr-day.selected.prevMonthDay,
+.flatpickr-day.selected.nextMonthDay {
+  background: var(--accent); border-color: var(--accent); color: #ffffff; font-weight: 600; box-shadow: none;
+}
+/* Time row (the pause-until picker) */
+.flatpickr-time { border-top-color: var(--border) !important; }
+.flatpickr-time input, .flatpickr-time .flatpickr-am-pm, .flatpickr-time .flatpickr-time-separator { color: var(--heading); }
+.flatpickr-time input:hover, .flatpickr-time .flatpickr-am-pm:hover,
+.flatpickr-time input:focus, .flatpickr-time .flatpickr-am-pm:focus { background: rgba(0, 145, 174, .1); }
 
 /* ── Phones ── */
 @media (max-width: 960px) {

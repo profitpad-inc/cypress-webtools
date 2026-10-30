@@ -1,14 +1,26 @@
 WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),
 ins AS (
   INSERT INTO cypress_rr_assignments (contact_id, contact_name, contact_email, joined_list_at, previous_owner_id,
-    owner_id, rep_id, rep_name, status, reason, skipped)
+    owner_id, rep_id, rep_name, status, reason, skipped, boosted)
   SELECT x->>'contact_id', COALESCE(x->>'contact_name', ''), COALESCE(x->>'contact_email', ''),
     NULLIF(x->>'joined_list_at', '')::timestamptz, x->>'previous_owner_id', x->>'owner_id',
     NULLIF(x->>'rep_id', '')::int, COALESCE(x->>'rep_name', ''), x->>'status', COALESCE(x->>'reason', ''),
-    COALESCE(x->'skipped', '[]'::jsonb)
+    COALESCE(x->'skipped', '[]'::jsonb), COALESCE((x->>'boosted')::boolean, false)
   FROM p, jsonb_array_elements(p.j->'rows') x
   ON CONFLICT (contact_id, joined_list_at) DO NOTHING
   RETURNING id
+),
+-- one boosted lead used per boosted row that really got assigned (a HubSpot refusal turns it into an error row)
+boost AS (
+  UPDATE cypress_rr_reps r SET boost_remaining = GREATEST(r.boost_remaining - c.n, 0), updated_at = now()
+  FROM (
+    SELECT (x->>'rep_id')::int AS rep_id, count(*) AS n
+    FROM p, jsonb_array_elements(p.j->'rows') x
+    WHERE x->>'status' = 'assigned' AND (x->>'boosted')::boolean IS TRUE
+    GROUP BY 1
+  ) c
+  WHERE r.id = c.rep_id
+  RETURNING r.id
 ),
 st AS (
   UPDATE cypress_rr_settings s SET

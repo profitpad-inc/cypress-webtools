@@ -1,4 +1,7 @@
 // rr-assign: decides each new member's owner and writes down why.
+// Boost: a rep with boost_remaining > 0 (on and not out of office) takes the lead ahead of the rotation; with several
+// boosted reps, the one with the most left goes first, so they share evenly. Boosted leads don't move the rotation
+// pointer, so the normal order carries on where it was once the boosts run out.
 function isAway(rep, now) {
   const until = rep.away_until ? Date.parse(rep.away_until) : 0;
   const from = rep.away_from ? Date.parse(rep.away_from) : 0;
@@ -22,6 +25,7 @@ function plan({ now, settings, reps, contacts, members }) {
   const contactById = new Map(contacts.map((c) => [String(c.id), c]));
   let pointer = startIndex(rotation, settings);
   let lastRep = null;
+  const boostLeft = new Map(rotation.map((r) => [r.id, Math.max(0, Number(r.boost_remaining) || 0)]));
   const rows = [];
   const updates = [];
 
@@ -52,6 +56,32 @@ function plan({ now, settings, reps, contacts, members }) {
     }
     if (settings.skip_if_owned && owner) {
       rows.push({ ...row, status: 'kept_existing', reason: 'The contact already had an owner, so it was left with them.' });
+      continue;
+    }
+
+    const boosted = rotation
+      .filter((r) => boostLeft.get(r.id) > 0 && !isAway(r, now))
+      .sort((a, b) => boostLeft.get(b.id) - boostLeft.get(a.id) || a.position - b.position)[0];
+    if (boosted) {
+      const left = boostLeft.get(boosted.id) - 1;
+      boostLeft.set(boosted.id, left);
+      const parts = [left > 0
+        ? `Boosted: ${boosted.name} is taking the next leads (${left} more after this one)`
+        : `Boosted: ${boosted.name}'s last boosted lead, the rotation picks up again after this`];
+      if (owner && owner !== String(boosted.hs_owner_id)) {
+        const prev = repByOwner.get(owner);
+        parts.push(`replaced the previous owner${prev ? ' ' + prev.name : ''}`);
+      }
+      rows.push({
+        ...row,
+        owner_id: String(boosted.hs_owner_id),
+        rep_id: boosted.id,
+        rep_name: boosted.name,
+        boosted: true,
+        status: 'assigned',
+        reason: parts.join(', ') + '.',
+      });
+      updates.push({ id: String(m.id), properties: { hubspot_owner_id: String(boosted.hs_owner_id) } });
       continue;
     }
 

@@ -29,7 +29,7 @@
     (function () {
       var params = new URLSearchParams(location.search);
       var q = [];
-      ['email', 'cid'].forEach(function (k) {
+      ['email', 'cid', 'firstname', 'lastname', 'firstName', 'lastName', 'first_name', 'last_name'].forEach(function (k) {
         var v = (params.get(k) || '').trim();
         // an unfilled HubSpot token ({{ contact.email }}) is not an email
         if (v && v.indexOf('{{') < 0) q.push(k + '=' + encodeURIComponent(v));

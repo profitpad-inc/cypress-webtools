@@ -7,9 +7,6 @@ ins AS (
   FROM p
   RETURNING id
 ),
-ptr AS (
-  UPDATE cypress_rr_settings s SET last_rep_id = (p.j->>'rep_id')::int, last_position = (p.j->>'rep_position')::int
-  FROM p WHERE s.id = 1 AND p.j->>'route' = 'rotation'
-  RETURNING s.id
-)
+-- Only logs the visit. The rotation and boosts move only when rr-assign really assigns a lead (2026-10-30, on request:
+-- "only progress to the next person in the rotation if the lead actually got assigned").
 SELECT (SELECT count(*) FROM ins) AS saved;
