@@ -48,11 +48,16 @@ class Flow:
 
   # ── node helpers ─────────────────────────────────────────────────────────
 
-  def webhook(self, method, path, x=0):
-    params = {"path": f"cypress-webtools/{path}", "responseMode": "responseNode", "options": {"allowedOrigins": "*"}}
+  # mode "responseNode" answers from a Respond node; "lastNode" answers once the whole run has finished
+  def webhook(self, method, path, x=0, y=0, mode="responseNode"):
+    params = {"path": f"cypress-webtools/{path}", "responseMode": mode, "options": {"allowedOrigins": "*"}}
+    if mode == "lastNode":
+      # answer empty once the run is done: the last node can be an IF with nothing to pass on ("No item to return
+      # was found", HTTP 500, seen 2026-10-30)
+      params["responseData"] = "noData"
     if method != "GET":
       params = {"httpMethod": method, **params}
-    return self.node("Webhook", "n8n-nodes-base.webhook", 2, params, x,
+    return self.node("Webhook", "n8n-nodes-base.webhook", 2, params, x, y,
                      webhookId=str(uuid.uuid5(NS, f"{self.key}/webhook")))
 
   def schedule(self, minutes, x=0):
@@ -236,23 +241,46 @@ def rr_assign():
 
 
 def rr_watch_overwrites():
-  f = Flow("rr-watch-overwrites", "Round robin: every 5 minutes, reads the owner history of contacts assigned in the last "
-                                  "30 days and records each later owner change (who, when, through what). Changes nothing in HubSpot.")
+  f = Flow("rr-watch-overwrites", "Round robin: every 5 minutes (or on POST watch-now), records each later owner change on leads from the last 30 days "
+                                  "(who, when, through what), and adds booking link visits that turned into a booking as that rep's "
+                                  "lead. Changes nothing in HubSpot.")
   f.schedule(5)
-  f.sql("Recent assignments", "watch-load.sql", 240, keep_going=False)
+  f.sql("Recent leads", "watch-load.sql", 240, keep_going=False)
   f.if_("Any?", "={{ !!$json.body.ids }}", 480)
   f.hubspot("HubSpot: owner history", {
     "resource": "objects", "objectType": "0-1", "operation": "batchRead", "batchReadInputMode": "ui",
     "batchReadObjectIds": "={{ $json.body.ids }}", "batchReadReturnAllMode": "allInOne",
-    "batchReadOptions": {"properties": ["hubspot_owner_id"], "propertiesWithHistory": ["hubspot_owner_id"]},
+    "batchReadOptions": {"properties": ["hubspot_owner_id", "firstname", "lastname"], "propertiesWithHistory": ["hubspot_owner_id"]},
   }, 720, keep_going=False)
   f.code("Find overwrites", "watch-find.js", 960)
-  f.if_("Found?", "={{ $json.count > 0 }}", 1200)
+  f.if_("Found?", "={{ $json.count > 0 || $json.renamed > 0 }}", 1200)
   f.sql("Save", "watch-save.sql", 1440, param=B64, keep_going=False)
-  f.chain("Schedule", "Recent assignments", "Any?")
+  f.chain("Schedule", "Recent leads", "Any?")
   f.link("Any?", "HubSpot: owner history")
   f.chain("HubSpot: owner history", "Find overwrites", "Found?")
   f.link("Found?", "Save")
+  # booked visits (2026-10-30, on request): a booking link visitor who became a contact owned by the rep they were sent
+  # to counts as that rep's lead (moves the rotation or uses a boosted lead). Looked up by email.
+  f.sql("Recent visits", "watch-visits-load.sql", 240, 240, keep_going=False)
+  f.if_("Any visits?", "={{ !!$json.body.emails }}", 480, 240)
+  f.hubspot("HubSpot: visitors", {
+    "resource": "objects", "objectType": "0-1", "operation": "batchRead", "batchReadInputMode": "ui",
+    "batchReadObjectIds": "={{ $json.body.emails }}", "batchReadReturnAllMode": "allInOne",
+    "batchReadOptions": {"idProperty": "email", "properties": ["email", "firstname", "lastname", "hubspot_owner_id", "hubspot_owner_assigneddate"]},
+  }, 720, 240, keep_going=False)
+  f.code("Find booked", "watch-booked.js", 960, 240)
+  f.if_("Booked?", "={{ $json.count > 0 }}", 1200, 240)
+  f.sql("Save booked", "watch-booked-save.sql", 1440, 240, param=B64, keep_going=False)
+  f.link("Schedule", "Recent visits")
+  # "Check HubSpot now" on the report (2026-10-30, on request): POST watch-now runs both branches at once and answers
+  # when they're done. Overlapping with a scheduled run is safe: the unique keys keep a lead or change from saving twice.
+  f.webhook("POST", "watch-now", 0, 480, mode="lastNode")
+  f.link("Webhook", "Recent leads")
+  f.link("Webhook", "Recent visits")
+  f.chain("Recent visits", "Any visits?")
+  f.link("Any visits?", "HubSpot: visitors")
+  f.chain("HubSpot: visitors", "Find booked", "Booked?")
+  f.link("Booked?", "Save booked")
   f.save()
 
 

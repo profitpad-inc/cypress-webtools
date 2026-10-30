@@ -5,7 +5,7 @@
     "executionOrder": "v1"
   },
   "meta": {
-    "description": "Round robin: every 5 minutes, reads the owner history of contacts assigned in the last 30 days and records each later owner change (who, when, through what). Changes nothing in HubSpot."
+    "description": "Round robin: every 5 minutes (or on POST watch-now), records each later owner change on leads from the last 30 days (who, when, through what), and adds booking link visits that turned into a booking as that rep's lead. Changes nothing in HubSpot."
   },
   "nodes": [
     {
@@ -29,8 +29,8 @@
       }
     },
     {
-      "id": "290a397f-4be5-5448-a88f-0031d08cc22a",
-      "name": "Recent assignments",
+      "id": "7e48fd0d-c293-537e-a458-bf99673e77d7",
+      "name": "Recent leads",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
@@ -39,7 +39,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT json_build_object('rows', COALESCE(json_agg(x), '[]'::json), 'ids', COALESCE(string_agg(x.contact_id, ','), '')) AS body\nFROM (\n  SELECT DISTINCT ON (a.contact_id) a.id, a.contact_id, a.owner_id, a.created_at\n  FROM cypress_rr_assignments a\n  WHERE a.created_at > now() - interval '30 days' AND a.status IN ('assigned', 'kept_existing') AND a.owner_id IS NOT NULL\n  ORDER BY a.contact_id, a.created_at DESC\n) x;\n",
+        "query": "-- Leads to watch for later owner changes: the latest per contact in the last 30 days (from the list or a booking),\n-- assigned or kept, with the owner the tool gave it and the name stored for it (kept in step with HubSpot).\nSELECT json_build_object('rows', COALESCE(json_agg(x), '[]'::json), 'ids', COALESCE(string_agg(x.contact_id, ','), '')) AS body\nFROM (\n  SELECT DISTINCT ON (l.contact_id) l.id, l.contact_id, l.contact_name, l.owner_id, l.created_at\n  FROM cypress_rr_leads l\n  WHERE l.created_at > now() - interval '30 days' AND l.status IN ('assigned', 'kept_existing') AND l.owner_id IS NOT NULL\n  ORDER BY l.contact_id, l.created_at DESC\n) x;\n",
         "options": {}
       },
       "credentials": {
@@ -100,7 +100,9 @@
         "batchReadReturnAllMode": "allInOne",
         "batchReadOptions": {
           "properties": [
-            "hubspot_owner_id"
+            "hubspot_owner_id",
+            "firstname",
+            "lastname"
           ],
           "propertiesWithHistory": [
             "hubspot_owner_id"
@@ -124,7 +126,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// rr-watch-overwrites: every owner change made after the tool's decision, from the contact's owner history.\n// The new owner is kept; this only records who changed it, when, and through what (Calendly, a user, a workflow).\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\nfunction findOverwrites(assignments, contacts) {\n  const byId = new Map(contacts.map((c) => [String(c.id), c]));\n  const rows = [];\n  for (const a of assignments) {\n    const c = byId.get(String(a.contact_id));\n    const history = (c?.propertiesWithHistory?.hubspot_owner_id || [])\n      .map((h) => ({ ...h, t: Date.parse(h.timestamp) }))\n      .filter((h) => Number.isFinite(h.t) && h.t > Date.parse(a.created_at))\n      .sort((x, y) => x.t - y.t);\n    let prev = a.owner_id ? String(a.owner_id) : '';\n    for (const h of history) {\n      const value = h.value ? String(h.value) : '';\n      if (value === prev) continue;\n      rows.push({\n        assignment_id: a.id,\n        contact_id: String(a.contact_id),\n        from_owner_id: prev || null,\n        to_owner_id: value || null,\n        source_type: h.sourceType || '',\n        source_id: h.sourceId || '',\n        source_label: h.sourceLabel || '',\n        changed_by_user_id: h.updatedByUserId ? String(h.updatedByUserId) : null,\n        changed_at: new Date(h.t).toISOString(),\n      });\n      prev = value;\n    }\n  }\n  return rows;\n}\n\nconst assignments = $('Recent assignments').first().json.body.rows || [];\nconst contacts = $input.first().json.results || [];\nconst rows = findOverwrites(assignments, contacts);\nreturn {\n  \"count\": rows.length,\n  \"p\": encode({ rows }),\n};\n"
+        "jsCode": "// rr-watch-overwrites: every owner change made after the tool's decision, from the contact's owner history.\n// The new owner is kept; this only records who changed it, when, and through what (Calendly, a user, a workflow).\n// Rows are leads (cypress_rr_leads), from the list or booked through the booking link.\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\nfunction findOverwrites(assignments, contacts) {\n  const byId = new Map(contacts.map((c) => [String(c.id), c]));\n  const rows = [];\n  for (const a of assignments) {\n    const c = byId.get(String(a.contact_id));\n    const history = (c?.propertiesWithHistory?.hubspot_owner_id || [])\n      .map((h) => ({ ...h, t: Date.parse(h.timestamp) }))\n      .filter((h) => Number.isFinite(h.t) && h.t > Date.parse(a.created_at))\n      .sort((x, y) => x.t - y.t);\n    let prev = a.owner_id ? String(a.owner_id) : '';\n    for (const h of history) {\n      const value = h.value ? String(h.value) : '';\n      if (value === prev) continue;\n      rows.push({\n        lead_id: a.id,\n        contact_id: String(a.contact_id),\n        from_owner_id: prev || null,\n        to_owner_id: value || null,\n        source_type: h.sourceType || '',\n        source_id: h.sourceId || '',\n        source_label: h.sourceLabel || '',\n        changed_by_user_id: h.updatedByUserId ? String(h.updatedByUserId) : null,\n        changed_at: new Date(h.t).toISOString(),\n      });\n      prev = value;\n    }\n  }\n  return rows;\n}\n\n// The contact's name as HubSpot has it now, where it differs from the lead's (2026-10-30: a booking link visitor\n// without a name gets one when they book, and the lead showed their email)\nfunction findRenames(leads, contacts) {\n  const byId = new Map(contacts.map((c) => [String(c.id), c]));\n  const out = [];\n  for (const l of leads) {\n    const p = byId.get(String(l.contact_id))?.properties || {};\n    const name = [p.firstname, p.lastname].filter(Boolean).join(' ').trim();\n    if (name && name !== (l.contact_name || '')) out.push({ contact_id: String(l.contact_id), name });\n  }\n  return out;\n}\n\nconst assignments = $('Recent leads').first().json.body.rows || [];\nconst contacts = $input.first().json.results || [];\nconst rows = findOverwrites(assignments, contacts);\nconst renames = findRenames(assignments, contacts);\nreturn {\n  \"count\": rows.length,\n  \"renamed\": renames.length,\n  \"p\": encode({ rows, renames }),\n};\n"
       }
     },
     {
@@ -146,7 +148,7 @@
           "conditions": [
             {
               "id": "c4a4049b-2fa4-56b2-bf21-e684a6b8a4e2",
-              "leftValue": "={{ $json.count > 0 }}",
+              "leftValue": "={{ $json.count > 0 || $json.renamed > 0 }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -171,7 +173,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nins AS (\n  INSERT INTO cypress_rr_overwrites (assignment_id, contact_id, from_owner_id, to_owner_id, source_type, source_id,\n    source_label, changed_by_user_id, changed_at)\n  SELECT (x->>'assignment_id')::bigint, x->>'contact_id', x->>'from_owner_id', x->>'to_owner_id',\n    COALESCE(x->>'source_type', ''), COALESCE(x->>'source_id', ''), COALESCE(x->>'source_label', ''),\n    x->>'changed_by_user_id', (x->>'changed_at')::timestamptz\n  FROM p, jsonb_array_elements(p.j->'rows') x\n  ON CONFLICT (assignment_id, changed_at) DO NOTHING\n  RETURNING id\n)\nSELECT count(*) AS inserted FROM ins;\n",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nins AS (\n  INSERT INTO cypress_rr_owner_changes (lead_id, contact_id, from_owner_id, to_owner_id, source_type, source_id,\n    source_label, changed_by_user_id, changed_at)\n  SELECT (x->>'lead_id')::bigint, x->>'contact_id', x->>'from_owner_id', x->>'to_owner_id',\n    COALESCE(x->>'source_type', ''), COALESCE(x->>'source_id', ''), COALESCE(x->>'source_label', ''),\n    x->>'changed_by_user_id', (x->>'changed_at')::timestamptz\n  FROM p, jsonb_array_elements(p.j->'rows') x\n  ON CONFLICT (lead_id, changed_at) DO NOTHING\n  RETURNING id\n),\n-- names as HubSpot has them now, on every lead of that contact\nren AS (\n  UPDATE cypress_rr_leads l SET contact_name = x->>'name'\n  FROM p, jsonb_array_elements(p.j->'renames') x\n  WHERE l.contact_id = x->>'contact_id' AND l.contact_name IS DISTINCT FROM x->>'name'\n  RETURNING l.id\n)\nSELECT (SELECT count(*) FROM ins) AS inserted, (SELECT count(*) FROM ren) AS renamed;\n",
         "options": {
           "queryReplacement": "={{ $json.p }}"
         }
@@ -182,6 +184,183 @@
           "name": "demo_db"
         }
       }
+    },
+    {
+      "id": "8c707112-5c3d-5cff-90c4-af322a1a2611",
+      "name": "Recent visits",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Booking link visits that may have turned into a booking: sent to the rotation or a boosted rep in the last 2 days,\n-- not a lead yet, and their email isn't already an assigned lead (from the list or an earlier booking).\nSELECT json_build_object('rows', COALESCE(json_agg(x ORDER BY x.created_at), '[]'::json),\n  'emails', COALESCE(string_agg(DISTINCT x.email, ','), '')) AS body\nFROM (\n  SELECT v.id, v.email, v.owner_id AS previous_owner_id, v.rep_id, v.rep_name, v.route, v.created_at, r.hs_owner_id\n  FROM cypress_rr_visits v JOIN cypress_rr_reps r ON r.id = v.rep_id\n  WHERE v.created_at > now() - interval '2 days' AND v.route IN ('rotation', 'boost') AND v.email <> ''\n    AND NOT EXISTS (SELECT 1 FROM cypress_rr_leads l WHERE l.visit_id = v.id)\n    AND NOT EXISTS (SELECT 1 FROM cypress_rr_leads l WHERE lower(l.contact_email) = v.email AND l.status = 'assigned')\n) x;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      }
+    },
+    {
+      "id": "459df524-7747-5dca-9441-341ead742d8e",
+      "name": "Any visits?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "b22ea795-280f-5762-9be6-b146947d674f",
+              "leftValue": "={{ !!$json.body.emails }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "77b37fbc-bc56-5e09-abf5-b941ec9adcde",
+      "name": "HubSpot: visitors",
+      "type": "CUSTOM.hubspotApi",
+      "typeVersion": 1,
+      "position": [
+        720,
+        240
+      ],
+      "parameters": {
+        "resource": "objects",
+        "objectType": "0-1",
+        "operation": "batchRead",
+        "batchReadInputMode": "ui",
+        "batchReadObjectIds": "={{ $json.body.emails }}",
+        "batchReadReturnAllMode": "allInOne",
+        "batchReadOptions": {
+          "idProperty": "email",
+          "properties": [
+            "email",
+            "firstname",
+            "lastname",
+            "hubspot_owner_id",
+            "hubspot_owner_assigneddate"
+          ]
+        }
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "zeoRTe2WDma5tuVC",
+          "name": "cypress hubspot"
+        }
+      }
+    },
+    {
+      "id": "d77fe6a7-29e0-51f7-bdff-de21f6ab375c",
+      "name": "Find booked",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        240
+      ],
+      "parameters": {
+        "jsCode": "// rr-watch-overwrites, booked visits (2026-10-30, on request): a booking link visitor sent to the rotation (or a boosted\n// rep) who books becomes a HubSpot contact owned by that rep (HubSpot meetings / Calendly set the owner). That counts as\n// the rep's lead: the Save adds it to cypress_rr_leads (source 'booking'), and the cypress_rr_lead_counted trigger\n// moves the rotation past them or uses one boosted lead, as for a list lead. One per email.\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\nconst SLACK_MS = 60 * 1000; // owner set up to a minute before the logged visit still counts (clock skew)\n\nfunction findBooked(visits, contacts) {\n  const byEmail = new Map();\n  for (const c of contacts) {\n    const p = c.properties || {};\n    if (p.email) {\n      byEmail.set(String(p.email).toLowerCase(), {\n        id: String(c.id),\n        name: [p.firstname, p.lastname].filter(Boolean).join(' '),\n        owner: p.hubspot_owner_id ? String(p.hubspot_owner_id) : '',\n        assigned: Date.parse(p.hubspot_owner_assigneddate || ''),\n      });\n    }\n  }\n  const out = new Map();\n  for (const v of visits) {\n    const c = byEmail.get(String(v.email).toLowerCase());\n    if (!c || !c.owner || c.owner !== String(v.hs_owner_id)) continue;\n    // the owner has to be set after the visit, so an owner the contact already had doesn't count\n    if (!Number.isFinite(c.assigned) || c.assigned < Date.parse(v.created_at) - SLACK_MS) continue;\n    // latest matching visit per email wins (visits come oldest first)\n    out.set(v.email, {\n      visit_id: v.id, email: v.email, contact_id: c.id, contact_name: c.name, previous_owner_id: v.previous_owner_id || null,\n      owner_id: c.owner, rep_id: v.rep_id, rep_name: v.rep_name, boosted: v.route === 'boost', visited_at: v.created_at,\n    });\n  }\n  return [...out.values()];\n}\n\nconst visits = $('Recent visits').first().json.body.rows || [];\nconst contacts = $input.first().json.results || [];\nconst rows = findBooked(visits, contacts);\nreturn {\n  \"count\": rows.length,\n  \"p\": encode({ rows }),\n};\n"
+      }
+    },
+    {
+      "id": "da6fa9ec-5c69-58b1-b9bd-f48ec23a7c5f",
+      "name": "Booked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "606ec9fc-78a3-58bb-8d59-c694f96aeabf",
+              "leftValue": "={{ $json.count > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0775fe7-9136-5825-95af-ff867b06e1ed",
+      "name": "Save booked",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Each booked visit becomes a lead (source 'booking', at the visit's time). The cypress_rr_lead_counted trigger then\n-- counts it like a list lead: a boosted one uses a boosted lead, any other moves the rotation to its rep unless an\n-- assigned lead from later is already in. Oldest first, so the latest booking ends up as the pointer.\nWITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nins AS (\n  INSERT INTO cypress_rr_leads (source, contact_id, contact_name, contact_email, visit_id, previous_owner_id, owner_id,\n    rep_id, rep_name, status, boosted, reason, created_at)\n  SELECT 'booking', x->>'contact_id', COALESCE(x->>'contact_name', ''), x->>'email', (x->>'visit_id')::bigint,\n    x->>'previous_owner_id', x->>'owner_id', (x->>'rep_id')::int, COALESCE(x->>'rep_name', ''), 'assigned',\n    COALESCE((x->>'boosted')::boolean, false),\n    'Booked a meeting with ' || COALESCE(x->>'rep_name', 'their rep') || ' through the booking link.',\n    (x->>'visited_at')::timestamptz\n  FROM p, jsonb_array_elements(p.j->'rows') x\n  ORDER BY (x->>'visited_at')::timestamptz\n  ON CONFLICT (visit_id) DO NOTHING\n  RETURNING id\n)\nSELECT count(*) AS booked FROM ins;\n",
+        "options": {
+          "queryReplacement": "={{ $json.p }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      }
+    },
+    {
+      "id": "727fec38-bc8e-5b2d-acbe-772e5c4caadc",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        480
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cypress-webtools/watch-now",
+        "responseMode": "lastNode",
+        "options": {
+          "allowedOrigins": "*"
+        },
+        "responseData": "noData"
+      },
+      "webhookId": "a3285da6-2f14-5aaf-ba87-e87492626f0d"
     }
   ],
   "connections": {
@@ -189,14 +368,19 @@
       "main": [
         [
           {
-            "node": "Recent assignments",
+            "node": "Recent leads",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Recent visits",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Recent assignments": {
+    "Recent leads": {
       "main": [
         [
           {
@@ -245,6 +429,77 @@
         [
           {
             "node": "Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Recent leads",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Recent visits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recent visits": {
+      "main": [
+        [
+          {
+            "node": "Any visits?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any visits?": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: visitors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: visitors": {
+      "main": [
+        [
+          {
+            "node": "Find booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find booked": {
+      "main": [
+        [
+          {
+            "node": "Booked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booked?": {
+      "main": [
+        [
+          {
+            "node": "Save booked",
             "type": "main",
             "index": 0
           }

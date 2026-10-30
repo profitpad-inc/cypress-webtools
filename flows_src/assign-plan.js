@@ -18,18 +18,20 @@ function startIndex(rotation, settings) {
   return next >= 0 ? next - 1 : rotation.length - 1;
 }
 
-function plan({ now, settings, reps, contacts, members }) {
+function plan({ now, settings, reps, contacts, members, booked }) {
   const paused = settings.paused && (!settings.paused_until || Date.parse(settings.paused_until) > now);
   const rotation = reps.filter((r) => r.enabled).sort((a, b) => a.position - b.position || a.id - b.id);
   const repByOwner = new Map(reps.map((r) => [String(r.hs_owner_id), r]));
   const contactById = new Map(contacts.map((c) => [String(c.id), c]));
   let pointer = startIndex(rotation, settings);
-  let lastRep = null;
   const boostLeft = new Map(rotation.map((r) => [r.id, Math.max(0, Number(r.boost_remaining) || 0)]));
   const rows = [];
   const updates = [];
+  // already a lead through the booking link (2026-10-30): not a second lead, so no row and no owner change
+  const alreadyBooked = new Set((booked || []).map(String));
 
   for (const m of members) {
+    if (alreadyBooked.has(String(m.id))) continue;
     const c = contactById.get(String(m.id));
     const p = c?.properties || {};
     const owner = p.hubspot_owner_id ? String(p.hubspot_owner_id) : null;
@@ -111,7 +113,6 @@ function plan({ now, settings, reps, contacts, members }) {
     }
 
     pointer = chosen.idx;
-    lastRep = chosen.rep;
     const parts = ['Next in the rotation'];
     if (skipped.length) {
       parts.push(`skipped ${skipped.map((s) => `${s.name} (out of office${s.away_reason ? ': ' + s.away_reason : ''})`).join(', ')}`);
@@ -132,12 +133,7 @@ function plan({ now, settings, reps, contacts, members }) {
     updates.push({ id: String(m.id), properties: { hubspot_owner_id: String(chosen.rep.hs_owner_id) } });
   }
 
-  return {
-    rows,
-    updates,
-    last_rep_id: lastRep ? lastRep.id : null,
-    last_position: lastRep ? lastRep.position : null,
-  };
+  return { rows, updates };
 }
 
 const state = $('Load state').first().json.body;
@@ -149,11 +145,10 @@ const out = plan({
   reps: state.reps || [],
   contacts: read.results || [],
   members: pick.members || [],
+  booked: state.booked || [],
 });
 return {
   "rows": out.rows,
   "updates": out.updates,
-  "last_rep_id": out.last_rep_id,
-  "last_position": out.last_position,
   "hasUpdates": out.updates.length > 0,
 };

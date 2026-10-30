@@ -74,7 +74,7 @@ Request node as predefined type `hubspotApi`), Postgres `0STT9QiFVsbUyNQG` (`dem
 | `book` | `LA5IQQSRKyw5fafT` | GET `book?email=` or `?cid=` | Universal booking link (§7.1). Answers `{url, rep_name, route}`, or 503 `{error}` when nobody is available. Logs the visit only: never moves the rotation or uses a boost. Reads HubSpot only |
 | `rr-assign` | `75DXhqjVfROOi6k6` | every 2 min | See §5 |
 | `book` | **Live and tested** 2026-10-30: no email went to the rotation, `jeffb@cypressvending.ca` (a HubSpot contact owned by Graham) went to Graham's link. The two test rows were deleted and the pointer put back on Matt A |
-| `rr-watch-overwrites` | `B1iPRK3B9hhbCnqv` | every 5 min | Latest assignment per contact in the last 30 days (assigned or kept), batch-reads `hubspot_owner_id` with history, records each change after the assignment time (from, to, `sourceType`, `sourceId`, `sourceLabel`, `updatedByUserId`). Changes nothing in HubSpot |
+| `rr-watch-overwrites` | `B1iPRK3B9hhbCnqv` | every 5 min | Latest assignment per contact in the last 30 days (assigned or kept), batch-reads `hubspot_owner_id` with history, records each change after the assignment time (from, to, `sourceType`, `sourceId`, `sourceLabel`, `updatedByUserId`). Second branch: **booked visits** (§7.1). Changes nothing in HubSpot |
 | `setup-db` | `WdkXyPiTf7DBHOEo` | POST `setup-db` | `flows_src/setup.sql`, idempotent. Unpublished |
 
 Postgres parameters are passed as one base64 JSON string (`convert_from(decode($1, 'base64'), 'UTF8')::jsonb`), so
@@ -123,11 +123,21 @@ it that way.
 - `cypress_rr_settings` (one row, id 1): `paused`, `paused_until`, `pause_reason`, `skip_if_owned` (default true),
   `last_rep_id`, `last_position`, `list_id` (378), `list_last_join_at`, `list_initialized`, `last_poll_at`,
   `last_poll_error`. `list_after` is unused (left from the first design).
-- `cypress_rr_assignments`: one row per list join: contact, previous owner, owner, rep, `status`
-  (`assigned`, `kept_existing`, `paused`, `no_reps`, `error`), `reason` (plain English), `skipped` jsonb, `boosted`.
-- `cypress_rr_overwrites`: owner changes after an assignment, `UNIQUE (assignment_id, changed_at)`.
-- `cypress_rr_bookings`: one row per booking link visit: email, contact, owner, rep, url, `route` (`owner`, `rotation`,
-  `repeat`, `boost`, `none`), `reason`, `skipped`.
+**Reworked 2026-10-30** (on request, demo phase; replaces `cypress_rr_assignments`, `cypress_rr_bookings`,
+`cypress_rr_overwrites`, which `setup.sql` copies over once and renames to `*_old`, kept, not used):
+- `cypress_rr_leads`: **every lead**, `source` `list` (rr-assign, one per list join, `UNIQUE (contact_id,
+  joined_list_at)`) or `booking` (a booking link visitor who became a contact owned by the rep they were sent to;
+  rr-watch-overwrites; `visit_id` unique). Contact, `previous_owner_id`, `owner_id`, rep, `status` (`assigned`,
+  `kept_existing`, `paused`, `no_reps`, `error`), `boosted`, `reason`, `skipped`. `created_at` is when the lead happened
+  (a booking: the visit's time), `detected_at` when it was recorded.
+- `cypress_rr_visits`: one row per booking link visit (log only): email, contact, owner, rep, url, `route` (`owner`,
+  `rotation`, `repeat`, `boost`, `none`), `reason`, `skipped`. A booked visit has a lead pointing at it.
+- `cypress_rr_owner_changes`: later owner changes per lead, `UNIQUE (lead_id, changed_at)`.
+- **Trigger `cypress_rr_lead_counted`** (AFTER INSERT on leads, per row): an `assigned` lead with a rep counts once: a
+  `boosted` one uses one of its rep's boosted leads; any other moves `last_rep_id` / `last_position` to its rep, unless
+  an assigned non-boosted lead with a later `created_at` exists. The only place the rotation and boosts move; rr-assign
+  and the booked-visit check just insert leads (oldest first). rr-assign skips list members who already have a
+  `booking` lead in the last 30 days, so a contact isn't a lead twice.
 
 Seed (from the Zapier "Round Robin" table): Jeff Bauer 78305435, Pat Nicastro 97798186, Graham Patt 481206057, Matt A
 742548153 (on, in that order), Mac Mills 78033913 (off: index 9 never came up in `MOD(counter, 4)`; his owner id is not
@@ -169,6 +179,46 @@ before the day after Out from). Not checked in a browser.
   **Boost** (number of next leads, End boost; "Boosted: N left" tag), time off, remove, "Next" badge mirroring the Plan logic; reps without a link are flagged as skipped by the
   booking link), the booking link card (`#booking`, copy buttons), add rep from HubSpot owners (since 2026-10-30, on request, an **Add rep** button in the Rotation card's footer, bottom left, that opens the search and meeting link fields in place, with Cancel; the separate "Add a rep" card is gone). Next to it, **Edit order** shows the up / down arrows column and each rep's Remove (both hidden otherwise) and turns into **Done** (2026-10-30, on request). Links to the HubSpot list.
 
+### 7.3 Table rework (2026-10-30, on request)
+
+See §6. Files: `setup.sql` (tables, one-time copy in a `DO` block, trigger), `book-load.sql` / `book-save.sql`
+(visits), `assign-load.sql` (adds `booked` contact ids), `assign-plan.js` (skips them; no pointer output),
+`assign-finalize.js` / `assign-save.sql` (insert leads in order, no pointer or boost code), `watch-load.sql` (leads),
+`watch-find.js` / `watch-save.sql` (`lead_id`), `watch-visits-load.sql` / `watch-booked.js` / `watch-booked-save.sql`
+(booked visit becomes a `booking` lead), `report.sql` (`leads`, `owner_changes`, `visits`), and the report page (every
+count from `leads`; Leads table shows booked leads with a Booked tag and a "Booked through the link" filter). The
+notes about `booked_at`, `booking_id` and `cypress_rr_overwrites` in §7.1 describe the first design. Node tests passed
+(booked visit match, owner change by `lead_id`, rr-assign skipping a booked contact). **Deployed 2026-10-30.** Note: `--publish
+setup-db setup-db` doesn't limit the deploy (`--publish` takes both names), so every changed flow went out with it,
+seconds before the copy; put flow names before `--publish` to deploy only those. `setup-db` answered leads 2, visits 3,
+owner changes 2, `last_rep_id` 3 (Graham, unchanged), then was unpublished; rr-assign stays unpublished. Watch run
+292054 on the new tables: found the same 2 owner changes, inserted 0. Report checked in the browser: same numbers as
+before the rework (2 leads, both booked; Pat 1 and Graham 1; 3 visits; 2 rows in Owner changes; net change 0).
+
+**Lead names from HubSpot** (2026-10-30, on request): a booking link visitor without a name gets one when they book,
+but the lead kept the visit's empty name (the report showed czbecher+6's email). `rr-watch-overwrites` now also reads
+`firstname` / `lastname` with the owner history and, where HubSpot's name differs from a lead's, updates
+`contact_name` on that contact's leads (`findRenames` in `watch-find.js`, `ren` in `watch-save.sql`; `Found?` also
+passes when there are renames). The visits table shows a booked visit's lead name. Rename logic tested in node.
+Deployed 2026-10-30; watch run 292095 renamed 1 lead (czbecher+6 is now "Chris Test03" on the report).
+Booking link card on Settings: the "Nobody available" step was dropped on request (3 steps).
+
+**Check HubSpot now** (2026-10-30, on request): a button at the bottom of the report POSTs `watch-now`, a second
+trigger on `rr-watch-overwrites` (webhook, `responseMode: lastNode`, so it answers when both branches are done), then
+reloads the whole page (2026-10-30, on request; an error shows a toast instead). Overlap with a scheduled run is safe (unique keys). Deployed 2026-10-30. The webhook
+uses `responseData: noData`: with the default, n8n answered HTTP 500 "No item to return was found" because the last
+node to run can be an IF with nothing to pass on (the run itself had succeeded). Checked: `watch-now` answers 200, and
+the button in the browser showed "Checked HubSpot"; the runs show in n8n as `webhook` mode.
+
+**Leads per day by rep** (2026-10-30, on request): a "By result / By rep" switch on the chart (remembered per browser
+in `localStorage`, `cw_trend_mode`). By rep stacks each day's assigned leads by rep, colored by the rep's place in the
+rotation from the dataviz reference palette (blue, orange, aqua, yellow, magenta, green, violet, red; the first five
+validated for stacked bars; aqua, yellow and magenta are under 3:1 on white, so the legend and hover text name each
+rep), with kept or unassigned leads in light gray and reps past the 8th as "Other reps". Checked in the browser with
+real data and with 70 fake leads in the tab.
+
+Booking page assets are at `?v=20261030d` (bumped for `styles.css` changes).
+
 ### 7.2 Layout pass (2026-10-30, on request: "do everything except C")
 
 Font, colors and header bar unchanged (user's rule). Option C (short meeting link labels with a pencil) was **not** done.
@@ -192,7 +242,8 @@ Font, colors and header bar unchanged (user's rule). Option C (short meeting lin
   day labels. These three colors passed the dataviz validator's color blindness, normal vision and contrast checks; #1c484a
   fails its lightness / chroma band (it's the existing dark teal, kept by the no-new-colors rule).
 - **Report, By rep:** Status column replaced by "Share of leads" (bar and % of assigned leads); Removed / Off / Out until
-  shows under the name only when it applies.
+  shows under the name only when it applies. With no assigned leads in the period the Share column is left out (empty gray bars looked like a loading
+  skeleton, 2026-10-30).
 - **Report, quiet state:** when the period has no leads, owner changes or visits, one card replaces the KPIs and all
   tables: "Waiting for the first sync" (before `list_initialized`, with the next rep and a link to Settings) or "Nothing
   in this period" (with "Show the last 30 days" for shorter ranges). The waiting banner is skipped then.
@@ -229,7 +280,9 @@ email it already had (fixed 2026-10-30; checked with sample query strings in nod
    on/off switch, which only controls new leads;
 3. anyone else: a boosted rep if there is one (`boost`, see §5 Boost), else the next enabled rep in the shared rotation who isn't out and has a link (`rotation`), read from the
    pointer `rr-assign` uses without moving it; the reason says why (new visitor, no owner, owner out, owner without a link);
-4. nobody: 503 and a "try again later" page (`none`).
+4. nobody: 503 and a "try again later" page (`none`). Its reason reads "<opening>, and nobody in the rotation was available." (reworded 2026-10-30, on
+   request; `setup.sql` rewrites visits logged with the old wording; deployed and run 2026-10-30, the 11:03 AM visit now reads "New visitor
+   (email not in HubSpot), and nobody in the rotation was available.").
 The scheduler is prefilled: Calendly gets `email` and `name`, HubSpot meetings get `email`, `firstName`, `lastName`.
 The values come from the link first (`?email=`, `?firstname=` / `firstName` / `first_name`, `?lastname=` / `lastName` /
 `last_name`; added 2026-10-30, on request), then from the HubSpot contact, so a visitor not in HubSpot is prefilled
@@ -239,6 +292,59 @@ try/catch, so every link went out bare until it was rewritten with a regex. Don'
 an email (`czbecher+1@gmail.com`) arrives as a space, because `+` means space in a query string; `book-validate.js` turns
 spaces back into `+`. Checked live after the fix: that email (a HubSpot contact owned by Matt A) got Matt's link with
 `email`, `firstName` and `lastName`.
+
+**Save bug (found 2026-10-30, execution 291779):** `book-save.sql` had a trailing `),` after its last CTE, left when
+the rotation pointer update was removed in commit 5e57f0f, so every Save failed with "Syntax error at line 1 near
+SELECT". Save is `onError: continueRegularOutput`, so visitors still got their link and executions showed green, but
+**no booking link visit was logged between 5e57f0f and the fix**. Fixed in `flows_src/book-save.sql`, rebuilt
+and deployed 2026-10-30. After the first deploy the active version had the fix but the draft still had the old query
+(possibly an open editor tab saved over it, unverified); redeployed with the editor closed, and the read-back showed draft
+and active both fixed and the same version (94f5f174). Close n8n editor tabs on a flow before deploying it. Not yet
+confirmed by a real visit: czbecher+6@gmail.com at 10:16 AM, 2026-10-30, saved and shows on the report (seen by the
+user and in the browser pane).
+
+**Booked visits** (2026-10-30, on request; `rr-watch-overwrites` second branch: `watch-visits-load.sql`,
+`watch-booked.js`, `watch-booked-save.sql`): visits only log, so a visitor who books on the rep's calendar (HubSpot
+Meetings or Calendly then create the contact and set the owner) used to leave that rep "next" (seen 2026-10-30:
+czbecher+6@gmail.com went to Pat, HubSpot Meetings made Pat the owner 16 s later, Pat stayed next). Every 5 min it reads
+`rotation` / `boost` visits from the last 2 days that aren't booked (and whose email has no booked visit and no
+`assigned` lead), batch-reads those emails in HubSpot (`idProperty: email`), and counts a visit as booked when the
+contact's owner is the rep it went to and `hubspot_owner_assigneddate` is after the visit (60 s slack). Save sets
+`booked_at` / `booked_contact_id` on that visit, uses one boosted lead for a `boost` visit, and for the latest `rotation`
+visit moves the pointer to its rep unless a lead was assigned or another booking counted after that visit. One per
+email. The report shows a **Booked** tag on the visit and "N booked" under the visits stat. In **By rep** (2026-10-30, on
+request), a booked visit counts in that rep's **Leads** (and the share bar) and **Bookings**; visits sent to an existing
+owner or never booked count in neither. Booked visits also count in the top **New leads** and **Assigned** KPIs
+("N booked" under Assigned; percentages use list leads plus booked visits) and as Assigned in the leads per day chart,
+on the visit's day (2026-10-30, on request).
+**Owner changes on booked visits** (2026-10-30, on request): `rr-watch-overwrites`'s `Recent assignments`
+(`watch-load.sql`) also reads booked visits from the last 30 days (`kind: 'booking'`, the booked contact, the rep's
+owner id as the expected owner, from the visit time), latest per contact. `watch-find.js` writes `booking_id` instead
+of `assignment_id` for those; `cypress_rr_overwrites.assignment_id` is now nullable, with `booking_id` (unique with
+`changed_at`). `report.sql` joins either and sends each visit's changes; the report counts them in "Owner changed
+later" and By rep "Changed", shows them under the visit's Why, and Owner changes says "booked with <rep>" for them.
+Detection tested in node (a booked visit reassigned Graham to Matt recorded; the booking's own owner set ignored).
+Deployed 2026-10-30 with a
+`setup-db` run (then unpublished). First run (execution 291952) watched both booked visits and recorded the user's own
+test: Chris Test07 (czbecher+7) booked with Graham, moved to Matt A at 14:40:43 UTC in HubSpot (CRM_UI, user 62490421);
+the report showed it in Owner changes, on the visit, in "Owner changed later" and in Graham's "Changed". "Gramham Patt"
+on the report is the owner's name as spelled in HubSpot. **Net changes** (2026-10-30, on
+request): when the latest owner change puts the contact back with the owner the tool gave it (the assigned rep, or the
+rep a visit was booked with), the report treats it as unchanged: no "Changed" notes on the lead or visit, not counted
+in "Owner changed later", By rep "Changed" or the "Owner changed later" filter (`netChanges()` in `report/index.html`).
+The database rows stay, and the Owner changes card still lists every change. Checked: Chris Test07 (Graham → Matt →
+Graham) shows no notes, "Owner changed later" 0, Graham "Changed" 0, Owner changes 2 rows. New columns
+`cypress_rr_bookings.booked_at`, `booked_contact_id` are in `setup.sql`. Match logic tested in node (booked rotation and
+boost visits counted; no contact, other owner, owner set before the visit skipped). Deployed 2026-10-30;
+`setup-db` was published, run once (answered reps 5, bookings 1, list 378) and unpublished again. First run, execution
+291875: the branch ran cleanly and found the czbecher+6 contact (owner Pat), but did **not** count it, correctly: the
+only logged visit is id 51 at 14:16:07, after the owner was set (14:09:31); the 14:09:15 visit that led to the booking
+was lost to the Save bug. That visit also said "email not in HubSpot" though the contact existed, which fits the user's
+note that the HubSpot connector pointed at the wrong portal until they fixed it (2026-10-30). On request, visit 51's
+`created_at` was set to 14:09:15.298 (the failed save's time) by a guarded one-off `UPDATE` in `setup.sql` (only that
+row, only once) and a `setup-db` run. The next watch run (execution 291883) counted it: `booked_at` set, contact
+259201633718, pointer moved from Jeff (rep 1) to Pat (rep 2), so Graham is next. First real booking counted. End to end on a fresh visit: czbecher+7@gmail.com, 14:39:21 to
+Graham (next), counted as booked 14:40:20 (contact 208693525642), pointer moved to Graham, Matt A next.
 
 **Prerender:** Chrome prerenders pages while the URL is typed (or a link is hovered) and runs their scripts, which
 logged every visit twice and moved the rotation twice (seen 2026-10-30 in the `book` executions: each pair had one call

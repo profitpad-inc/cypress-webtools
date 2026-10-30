@@ -40,7 +40,14 @@
 
     <!-- Leads per day, for ranges longer than a day -->
     <section class="card" id="trend-card" hidden>
-      <div class="card-head"><div><h2>Leads per day</h2><p>New leads by result. Hover a day for the numbers.</p></div></div>
+      <div class="card-head">
+        <div><h2>Leads per day</h2><p id="trend-sub">New leads by result. Hover a day for the numbers.</p></div>
+        <!-- by result, or by the rep each lead went to (2026-10-30, on request) -->
+        <div class="seg" id="trend-mode" role="group" aria-label="Break leads down">
+          <button type="button" data-mode="result">By result</button>
+          <button type="button" data-mode="rep">By rep</button>
+        </div>
+      </div>
       <div class="trend" id="trend"></div>
     </section>
 
@@ -48,7 +55,7 @@
       <div class="card-head">
         <div>
           <h2 id="leads-title">Leads</h2>
-          <p>Every contact that joined the <a class="xlink" id="list-link" target="_blank" rel="noopener">round robin list</a> in this period.</p>
+          <p>Contacts that joined the <a class="xlink" id="list-link" target="_blank" rel="noopener">round robin list</a> or booked through the booking link in this period.</p>
         </div>
         <select class="input" id="filter" aria-label="Filter leads" style="width:auto;border-radius:999px">
           <option value="">All results</option>
@@ -56,6 +63,7 @@
           <option value="kept_existing">Kept existing owner</option>
           <option value="unassigned">Not assigned</option>
           <option value="overwritten">Owner changed later</option>
+          <option value="booking">Booked through the link</option>
         </select>
       </div>
       <div class="table-wrap" id="leads"><div class="loading"><span class="spinner"></span></div></div>
@@ -63,11 +71,11 @@
 
     <div class="split" id="split">
       <section class="card">
-        <div class="card-head"><div><h2>By rep</h2><p>Each rep's share of assigned leads, and their booking link visits.</p></div></div>
+        <div class="card-head"><div><h2>By rep</h2><p>Leads each rep got: assigned from the list or booked through the booking link.</p></div></div>
         <div class="table-wrap" id="by-rep"></div>
       </section>
       <section class="card">
-        <div class="card-head"><div><h2>Owner changes</h2><p>Changes made after the tool assigned a lead, by when they happened.</p></div></div>
+        <div class="card-head"><div><h2>Owner changes</h2><p>Changes made after a lead was assigned or booked, by when they happened.</p></div></div>
         <div class="table-wrap" id="changes"></div>
       </section>
     </div>
@@ -79,6 +87,12 @@
       </div>
       <div class="table-wrap" id="bookings"></div>
     </section>
+
+    <!-- Runs rr-watch-overwrites now (2026-10-30, on request) instead of waiting for its 5-minute schedule -->
+    <div class="report-foot">
+      <span class="faint">Bookings and owner changes are picked up from HubSpot every 5 minutes.</span>
+      <button class="btn btn--ghost btn--sm" type="button" id="watch-now">Check HubSpot now</button>
+    </div>
   </main>
 
   <script src="../vendor/flatpickr.min.js"></script>
@@ -169,18 +183,26 @@
 
       function render() {
         var d = state.data;
-        var rows = d.assignments || [];
-        var books = d.bookings || [];
+        // one list of leads (since the 2026-10-30 table rework): from the list or booked through the booking link
+        var rows = d.leads || [];
+        var visits = d.visits || [];
         var now = Date.now();
         // nothing in the period: one card instead of six zeros and three empty tables (set before the banners)
-        state.quiet = !rows.length && !books.length && !(d.overwrites || []).length;
+        state.quiet = !rows.length && !visits.length && !(d.owner_changes || []).length;
         renderBanners(d, now);
 
+        var bookedN = rows.filter(function (a) { return a.source === 'booking'; }).length;
         var assigned = rows.filter(function (a) { return a.status === 'assigned'; }).length;
         var kept = rows.filter(function (a) { return a.status === 'kept_existing'; }).length;
         var unassigned = rows.filter(isUnassigned).length;
-        var overwritten = rows.filter(function (a) { return (a.overwrites || []).length; }).length;
-        var pct = function (n) { return rows.length ? Math.round(n * 100 / rows.length) + '% of leads' : ' '; };
+        var overwritten = rows.filter(function (a) { return leadChanges(a).length; }).length;
+        var pct = function (n) { return rows.length ? Math.round(n * 100 / rows.length) + '% of leads' : '\u00a0'; };
+        // booked: the visit turned into a lead (the visitor became the rep's contact)
+        var visitsSub = function (list) {
+          var booked = list.filter(function (v) { return v.lead_id; }).length;
+          var owner = list.filter(function (v) { return v.route === 'owner'; }).length;
+          return [booked ? booked + ' booked' : '', owner ? owner + ' to their owner' : ''].filter(Boolean).join(', ') || '\u00a0';
+        };
         var period = state.from === state.to
           ? dayLabel(state.from, { weekday: 'long', month: 'short', day: 'numeric' })
           : dayLabel(state.from, short) + ' to ' + dayLabel(state.to, short);
@@ -192,20 +214,20 @@
         // New leads and Assigned are the main tiles; the rest are smaller (.kpi--main)
         document.getElementById('kpis').innerHTML = [
           ['New leads', rows.length, period, true],
-          ['Assigned', assigned, pct(assigned), true],
+          ['Assigned', assigned, pct(assigned) + (bookedN ? ', ' + bookedN + ' booked' : ''), true],
           ['Kept existing owner', kept, pct(kept)],
-          ['Not assigned', unassigned, unassigned ? 'paused, nobody free or errors' : ' '],
+          ['Not assigned', unassigned, unassigned ? 'paused, nobody free or errors' : '\u00a0'],
           ['Owner changed later', overwritten, pct(overwritten)],
-          ['Booking link visits', books.length, books.length ? books.filter(function (b) { return b.route === 'owner'; }).length + ' to their owner' : ' '],
+          ['Booking link visits', visits.length, visits.length ? visitsSub(visits) : '\u00a0'],
         ].map(function (k) {
           return '<div class="kpi' + (k[3] ? ' kpi--main' : '') + '"><div class="kpi__lbl">' + esc(k[0]) + '</div><div class="kpi__val">' + k[1] + '</div><div class="kpi__sub">' + esc(k[2]) + '</div></div>';
         }).join('');
 
         renderTrend(rows);
         renderLeads(rows);
-        renderByRep(rows, books, d.reps || [], now);
-        renderChanges(d.overwrites || []);
-        renderBookings(books);
+        renderByRep(rows, d.reps || [], now);
+        renderChanges(d.owner_changes || []);
+        renderVisits(visits);
       }
 
       function renderBanners(d, now) {
@@ -252,42 +274,100 @@
         if (more) more.onclick = function () { var t = CW.dayString(new Date()); setRange(CW.addDays(t, -29), t); };
       }
 
-      // Leads per day for ranges over a day: stacked bars (assigned, kept owner, not assigned), the leads table is the
-      // table view. Colors are the page's own teal, dark teal and amber (validated for color blindness 2026-10-30).
+      // Leads per day for ranges over a day: stacked bars, 2px gaps; the leads table and By rep are the table views.
+      // By result: assigned, kept owner, not assigned, in the page's teal, dark teal and amber (validated 2026-10-30).
+      // By rep (2026-10-30, on request): each rep's assigned leads, colored by the rep's place in the rotation (so a
+      // rep keeps their color), from the dataviz reference palette (first 5 validated for stacks; 3 are under 3:1 on
+      // white, so the legend and hover text name every rep); kept and unassigned leads in gray; a 9th rep and up, or
+      // one no longer listed, in "Other reps".
+      var RESULT_COLORS = { assigned: '#0091ae', kept: '#1c484a', none: '#b36b00' };
+      var REP_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+      var OTHER_REPS = '#7c98b6', NOT_ASSIGNED = '#cbd6e2';
+      state.trendMode = 'result';
+      try { if (localStorage.getItem('cw_trend_mode') === 'rep') state.trendMode = 'rep'; } catch (e) { /* storage blocked */ }
+
+      function trendSeries(rows) {
+        if (state.trendMode !== 'rep') {
+          return {
+            series: [
+              { key: 'assigned', label: 'Assigned', color: RESULT_COLORS.assigned },
+              { key: 'kept', label: 'Kept existing owner', color: RESULT_COLORS.kept },
+              { key: 'none', label: 'Not assigned', color: RESULT_COLORS.none },
+            ],
+            keyOf: function (a) { return a.status === 'assigned' ? 'assigned' : a.status === 'kept_existing' ? 'kept' : 'none'; },
+          };
+        }
+        var reps = ((state.data && state.data.reps) || []).slice().sort(function (x, y) { return x.position - y.position || x.id - y.id; });
+        var slot = {};
+        reps.forEach(function (r, i) { slot[r.id] = i; });
+        var keyOf = function (a) {
+          if (a.status !== 'assigned') return 'na';
+          return slot[a.rep_id] != null && slot[a.rep_id] < REP_COLORS.length ? 'rep' + a.rep_id : 'other';
+        };
+        // only reps (and buckets) that have leads in the period get a legend entry
+        var used = {};
+        rows.forEach(function (a) { used[keyOf(a)] = true; });
+        var series = reps.filter(function (r) { return used['rep' + r.id]; })
+          .map(function (r) { return { key: 'rep' + r.id, label: r.name, color: REP_COLORS[slot[r.id]] }; });
+        if (used.other) series.push({ key: 'other', label: 'Other reps', color: OTHER_REPS });
+        if (used.na) series.push({ key: 'na', label: 'Kept owner or not assigned', color: NOT_ASSIGNED });
+        return { series: series, keyOf: keyOf };
+      }
+
       function renderTrend(rows) {
         var card = document.getElementById('trend-card');
         card.hidden = state.from === state.to || !rows.length;
         if (card.hidden) return;
+        Array.prototype.forEach.call(document.querySelectorAll('#trend-mode button'), function (b) {
+          b.classList.toggle('on', b.getAttribute('data-mode') === state.trendMode);
+        });
+        document.getElementById('trend-sub').textContent = state.trendMode === 'rep'
+          ? 'New leads by the rep they went to. Hover a day for the numbers.'
+          : 'New leads by result. Hover a day for the numbers.';
+        var cfg = trendSeries(rows);
         var days = [], byDay = {};
         for (var day = state.from; day <= state.to; day = CW.addDays(day, 1)) {
           days.push(day);
-          byDay[day] = { assigned: 0, kept: 0, none: 0 };
+          byDay[day] = {};
         }
         rows.forEach(function (a) {
           var b = byDay[CW.dayString(new Date(a.created_at))];
           if (!b) return;
-          if (a.status === 'assigned') b.assigned++;
-          else if (a.status === 'kept_existing') b.kept++;
-          else b.none++;
+          var k = cfg.keyOf(a);
+          b[k] = (b[k] || 0) + 1;
         });
-        var max = Math.max.apply(null, days.map(function (k) { var b = byDay[k]; return b.assigned + b.kept + b.none; })) || 1;
+        var total = function (b) { return cfg.series.reduce(function (t, x) { return t + (b[x.key] || 0); }, 0); };
+        var max = Math.max.apply(null, days.map(function (k) { return total(byDay[k]); })) || 1;
         var PLOT = 112; // px for the tallest day, under the 120px plot
-        var seg = function (n, cls) { return n ? '<span class="trend__seg ' + cls + '" style="height:' + Math.max(2, Math.round(n * PLOT / max)) + 'px"></span>' : ''; };
         var bars = days.map(function (k) {
-          var b = byDay[k], total = b.assigned + b.kept + b.none;
-          var tip = dayLabel(k, { weekday: 'short', month: 'short', day: 'numeric' }) + ': ' + total + (total === 1 ? ' lead' : ' leads') +
-            (total ? ' (' + [[b.assigned, 'assigned'], [b.kept, 'kept owner'], [b.none, 'not assigned']].filter(function (p) { return p[0]; })
-              .map(function (p) { return p[0] + ' ' + p[1]; }).join(', ') + ')' : '');
-          return '<div class="trend__day" title="' + esc(tip) + '" aria-label="' + esc(tip) + '" role="img">' +
-            seg(b.assigned, 'seg--assigned') + seg(b.kept, 'seg--kept') + seg(b.none, 'seg--none') + '</div>';
+          var b = byDay[k], t = total(b);
+          var parts = cfg.series.filter(function (x) { return b[x.key]; }).map(function (x) { return b[x.key] + ' ' + x.label; });
+          var tip = dayLabel(k, { weekday: 'short', month: 'short', day: 'numeric' }) + ': ' + t + (t === 1 ? ' lead' : ' leads') +
+            (parts.length ? ' (' + parts.join(', ') + ')' : '');
+          // first series at the bottom (column-reverse), the last one drawn gets the rounded top
+          var segs = cfg.series.map(function (x) {
+            var n = b[x.key] || 0;
+            return n ? '<span class="trend__seg" style="height:' + Math.max(2, Math.round(n * PLOT / max)) + 'px;background:' + x.color + '"></span>' : '';
+          }).join('');
+          return '<div class="trend__day" title="' + esc(tip) + '" aria-label="' + esc(tip) + '" role="img">' + segs + '</div>';
         }).join('');
         var mid = days[Math.floor((days.length - 1) / 2)];
         document.getElementById('trend').innerHTML =
-          '<div class="trend__legend"><span><i class="seg--assigned"></i>Assigned</span><span><i class="seg--kept"></i>Kept existing owner</span><span><i class="seg--none"></i>Not assigned</span></div>' +
+          '<div class="trend__legend">' + cfg.series.map(function (x) {
+            return '<span><i style="background:' + x.color + '"></i>' + esc(x.label) + '</span>';
+          }).join('') + '</div>' +
           '<div class="trend__plot"><span class="trend__max">' + max + '</span>' + bars + '</div>' +
           '<div class="trend__axis"><span>' + esc(dayLabel(days[0], short)) + '</span>' + (days.length > 2 ? '<span>' + esc(dayLabel(mid, short)) + '</span>' : '') +
             '<span>' + esc(dayLabel(days[days.length - 1], short)) + '</span></div>';
       }
+
+      document.getElementById('trend-mode').addEventListener('click', function (e) {
+        var mode = e.target.getAttribute('data-mode');
+        if (!mode || mode === state.trendMode) return;
+        state.trendMode = mode;
+        try { localStorage.setItem('cw_trend_mode', mode); } catch (err) { /* storage blocked */ }
+        if (state.data) renderTrend(state.data.leads || []);
+      });
 
       function contactCell(id, name, email) {
         return (id ? '<a class="strong" href="' + CW.contactUrl(id) + '" target="_blank" rel="noopener">' + esc(name || 'Contact ' + id) + '</a>'
@@ -299,18 +379,38 @@
         return (state.from !== state.to ? esc(CW.fmtDate(iso, short)) + '<br>' : '') + esc(CW.fmtTime(iso));
       }
 
+      // A lead's or booked visit's owner changes, unless the latest one put the contact back with the owner the tool
+      // gave it: then nothing changed in the end, so it shows no notes and doesn't count as changed in the stats
+      // (2026-10-30, on request; the rows stay in the database and the Owner changes card lists every change)
+      function netChanges(list, ownerId) {
+        list = list || [];
+        if (!list.length || !ownerId) return list;
+        return String(list[list.length - 1].to_owner_id) === String(ownerId) ? [] : list;
+      }
+      function leadChanges(a) { return netChanges(a.changes, a.owner_id); }
+
+      // "Changed" notes under a lead or a booked visit: each later owner change, who made it and how
+      function changeNotes(list) {
+        var n = state.namer;
+        return (list || []).map(function (o) {
+          return '<div class="note"><span class="tag tag--changed">Changed</span><span>' + esc(CW.fmtDateTime(o.changed_at)) + ': ' +
+            esc(n.owner(o.from_owner_id)) + ' &rarr; <strong>' + esc(n.owner(o.to_owner_id)) + '</strong> by ' + esc(CW.sourceText(o, n)) + '</span></div>';
+        }).join('');
+      }
+
       function renderLeads(rows) {
         var f = document.getElementById('filter').value;
         var list = rows.filter(function (a) {
           if (!f) return true;
           if (f === 'unassigned') return isUnassigned(a);
-          if (f === 'overwritten') return (a.overwrites || []).length > 0;
+          if (f === 'overwritten') return leadChanges(a).length > 0;
+          if (f === 'booking') return a.source === 'booking';
           return a.status === f;
         });
         document.getElementById('leads-title').textContent = 'Leads (' + list.length + ')';
         if (!list.length) {
           document.getElementById('leads').innerHTML = '<div class="empty"><strong>No leads ' + (f ? 'match this filter' : 'in this period') + '</strong>' +
-            (f ? 'Try another filter.' : 'Leads appear here as they join the HubSpot list.') + '</div>';
+            (f ? 'Try another filter.' : 'Leads appear here as they join the HubSpot list or book through the booking link.') + '</div>';
           return;
         }
         var n = state.namer;
@@ -319,33 +419,32 @@
             var st = STATUS[a.status] || ['tag--gray', a.status];
             var owner = a.status === 'assigned' ? esc(a.rep_name || n.owner(a.owner_id))
               : a.owner_id ? esc(n.owner(a.owner_id)) : '<span class="muted">Unassigned</span>';
-            var notes = (a.overwrites || []).map(function (o) {
-              return '<div class="note"><span class="tag tag--changed">Changed</span><span>' + esc(CW.fmtDateTime(o.changed_at)) + ': ' +
-                esc(n.owner(o.from_owner_id)) + ' &rarr; <strong>' + esc(n.owner(o.to_owner_id)) + '</strong> by ' + esc(CW.sourceText(o, n)) + '</span></div>';
-            }).join('');
+            var notes = changeNotes(leadChanges(a));
             var skipped = (a.skipped || []).length && a.status !== 'assigned'
               ? '<div class="faint">Skipped: ' + a.skipped.map(function (s) { return esc(s.name) + (s.away_until ? ' (back ' + esc(CW.fmtDate(s.away_until, short)) + ')' : ''); }).join(', ') + '</div>'
               : '';
             return '<tr>' +
               '<td class="nowrap">' + timeCell(a.created_at) + '</td>' +
-              '<td>' + contactCell(a.contact_id, a.contact_name, a.contact_email) + '</td>' +
-              '<td><span class="tag ' + st[0] + '">' + esc(st[1]) + '</span>' + (a.boosted ? ' <span class="tag tag--boost">Boosted</span>' : '') + '</td>' +
+              // without a name the email is the link text
+              '<td>' + contactCell(a.contact_id, a.contact_name || a.contact_email, a.contact_name ? a.contact_email : '') + '</td>' +
+              '<td class="nowrap"><span class="tag ' + st[0] + '">' + esc(st[1]) + '</span>' + (a.boosted ? ' <span class="tag tag--boost">Boosted</span>' : '') +
+                (a.source === 'booking' ? ' <span class="tag tag--ok" title="Booked through the booking link">Booked</span>' : '') + '</td>' +
               '<td class="nowrap">' + owner + '</td>' +
               '<td>' + esc(a.reason) + skipped + notes + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table>';
       }
 
-      function renderByRep(rows, books, reps, now) {
+      // Leads: assigned leads, from the list or booked; Bookings: the booked ones (visits sent to an existing owner, or
+      // never booked, aren't leads); Changed: leads whose owner someone changed for good (2026-10-30, on request)
+      function renderByRep(rows, reps, now) {
         var counts = {}, lost = {}, booked = {};
         rows.forEach(function (a) {
           if (a.status !== 'assigned') return;
           counts[a.owner_id] = (counts[a.owner_id] || 0) + 1;
-          if ((a.overwrites || []).length) lost[a.owner_id] = (lost[a.owner_id] || 0) + 1;
+          if (a.source === 'booking') booked[a.owner_id] = (booked[a.owner_id] || 0) + 1;
+          if (leadChanges(a).length) lost[a.owner_id] = (lost[a.owner_id] || 0) + 1;
         });
-        var ownerOfRep = {};
-        reps.forEach(function (r) { ownerOfRep[r.id] = r.hs_owner_id; });
-        books.forEach(function (b) { var o = ownerOfRep[b.rep_id]; if (o) booked[o] = (booked[o] || 0) + 1; });
         var ids = reps.map(function (r) { return r.hs_owner_id; });
         Object.keys(counts).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
         var byOwner = {};
@@ -355,15 +454,16 @@
         Object.keys(counts).forEach(function (id) { total += counts[id]; });
         // Share of assigned leads as a bar (replaced the Status column 2026-10-30, on request; status is on
         // Settings, and only an unusual one shows here, under the name).
-        document.getElementById('by-rep').innerHTML = '<table class="compact"><thead><tr><th>Rep</th><th>Share of leads</th><th class="num">Leads</th>' +
-          '<th class="num" title="Leads assigned to them whose owner someone changed later">Changed</th><th class="num">Bookings</th></tr></thead><tbody>' +
+        // No assigned leads in the period: no Share column (empty gray bars looked like a loading skeleton, 2026-10-30)
+        document.getElementById('by-rep').innerHTML = '<table class="compact"><thead><tr><th>Rep</th>' + (total ? '<th>Share of leads</th>' : '') + '<th class="num">Leads</th>' +
+          '<th class="num" title="Their leads (assigned or booked) whose owner someone changed later">Changed</th><th class="num" title="Booking link visitors who booked with this rep (also counted in Leads)">Bookings</th></tr></thead><tbody>' +
           ids.map(function (id) {
             var r = byOwner[id];
             var note = !r ? 'Removed' : !r.enabled ? 'Off' : CW.isAway(r, now) ? 'Out until ' + CW.fmtDate(r.away_until, short) : '';
             var share = total ? Math.round((counts[id] || 0) * 100 / total) : 0;
             return '<tr><td class="nowrap"><span class="strong">' + esc(r ? r.name : n.owner(id)) + '</span>' + (note ? '<div class="faint">' + esc(note) + '</div>' : '') + '</td>' +
-              '<td><div class="share"><span class="share__track"><span class="share__bar" style="width:' + share + '%"></span></span>' +
-                '<span class="share__pct">' + (total ? share + '%' : '') + '</span></div></td>' +
+              (total ? '<td><div class="share"><span class="share__track"><span class="share__bar" style="width:' + share + '%"></span></span>' +
+                '<span class="share__pct">' + share + '%</span></div></td>' : '') +
               '<td class="num">' + (counts[id] || 0) + '</td><td class="num">' + (lost[id] || 0) + '</td><td class="num">' + (booked[id] || 0) + '</td></tr>';
           }).join('') + '</tbody></table>';
       }
@@ -371,19 +471,20 @@
       function renderChanges(list) {
         var n = state.namer;
         if (!list.length) {
-          document.getElementById('changes').innerHTML = '<div class="empty"><strong>No owner changes</strong>Nobody changed the owner of an assigned lead in this period.</div>';
+          document.getElementById('changes').innerHTML = '<div class="empty"><strong>No owner changes</strong>Nobody changed the owner of an assigned or booked lead in this period.</div>';
           return;
         }
         document.getElementById('changes').innerHTML = '<table><thead><tr><th>When</th><th>Contact</th><th>Change</th><th>By</th></tr></thead><tbody>' +
           list.map(function (o) {
             return '<tr><td class="nowrap">' + esc(CW.fmtDateTime(o.changed_at)) + '</td>' +
-              '<td>' + contactCell(o.contact_id, o.contact_name, '') + '<div class="faint">assigned ' + esc(CW.fmtDateTime(o.assigned_at)) + '</div></td>' +
+              '<td>' + contactCell(o.contact_id, o.contact_name, '') + '<div class="faint">' + (o.source === 'booking' ? 'booked with ' + esc(o.lead_rep_name || n.owner(o.lead_owner_id)) + ' ' : 'assigned ') + esc(CW.fmtDateTime(o.lead_at)) + '</div></td>' +
               '<td>' + esc(n.owner(o.from_owner_id)) + ' &rarr; <strong>' + esc(n.owner(o.to_owner_id)) + '</strong></td>' +
               '<td>' + esc(CW.sourceText(o, n)) + '</td></tr>';
           }).join('') + '</tbody></table>';
       }
 
-      function renderBookings(list) {
+
+      function renderVisits(list) {
         document.getElementById('book-title').textContent = 'Booking link visits (' + list.length + ')';
         if (!list.length) {
           document.getElementById('bookings').innerHTML = '<div class="empty"><strong>No visits</strong>Nobody opened the booking link in this period.</div>';
@@ -393,14 +494,31 @@
           list.map(function (b) {
             var r = ROUTE[b.route] || ['tag--gray', b.route];
             return '<tr><td class="nowrap">' + timeCell(b.created_at) + '</td>' +
-              '<td>' + contactCell(b.contact_id, b.contact_name, b.email) + '</td>' +
-              '<td><span class="tag ' + r[0] + '">' + esc(r[1]) + '</span></td>' +
+              // a booked visit links to the contact it became; without a name the email is the link text
+              // a booked visit shows the name the contact has now (from its lead); without one the email is the link text
+              '<td>' + contactCell(b.contact_id || b.lead_contact_id, b.contact_name || b.lead_contact_name || b.email, (b.contact_name || b.lead_contact_name) ? b.email : '') + '</td>' +
+              '<td class="nowrap"><span class="tag ' + r[0] + '">' + esc(r[1]) + '</span>' +
+                (b.lead_id ? ' <span class="tag tag--ok" title="Became a contact owned by this rep, ' + esc(CW.fmtDateTime(b.booked_at)) + '; counted as their lead">Booked</span>' : '') + '</td>' +
               '<td class="nowrap">' + (b.rep_name ? esc(b.rep_name) : '<span class="muted">Nobody</span>') + '</td>' +
-              '<td>' + esc(b.reason) + '</td></tr>';
+              '<td>' + esc(b.reason) + changeNotes(netChanges(b.changes, b.lead_owner_id)) + '</td></tr>';
           }).join('') + '</tbody></table>';
       }
 
-      document.getElementById('filter').addEventListener('change', function () { if (state.data) renderLeads(state.data.assignments || []); });
+      var watchBtn = document.getElementById('watch-now');
+      watchBtn.addEventListener('click', function () {
+        watchBtn.disabled = true;
+        watchBtn.innerHTML = '<span class="spinner"></span> Checking HubSpot';
+        // the flow answers once its run is done: reload the whole page then (2026-10-30, on request)
+        CW.api('POST', 'watch-now', {}).then(function () {
+          location.reload();
+        }).catch(function (e) {
+          CW.toast('Could not check HubSpot: ' + e.message, true);
+          watchBtn.disabled = false;
+          watchBtn.textContent = 'Check HubSpot now';
+        });
+      });
+
+      document.getElementById('filter').addEventListener('change', function () { if (state.data) renderLeads(state.data.leads || []); });
       document.getElementById('prev').addEventListener('click', function () { var n = rangeDays(); setRange(CW.addDays(state.from, -n), CW.addDays(state.to, -n)); });
       document.getElementById('next').addEventListener('click', function () { var n = rangeDays(); setRange(CW.addDays(state.from, n), CW.addDays(state.to, n)); });
       document.getElementById('quick').addEventListener('click', function (e) {

@@ -262,7 +262,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .link-in { width: 100%; }
 
 /* Booking link: how it picks a rep, as numbered steps */
-.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
 .steps li { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; background: var(--surface-head); border: 1px solid var(--border); border-radius: 10px; }
 .steps__n {
   flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px;
@@ -287,9 +287,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .trend__day:hover { background: rgba(0, 145, 174, .06); }
 .trend__seg { display: block; }
 .trend__seg:last-child { border-radius: 4px 4px 0 0; }
-.seg--assigned { background: #0091ae; }
-.seg--kept { background: #1c484a; }
-.seg--none { background: #b36b00; }
+/* segment and legend colors are set inline by the report (by result or by rep) */
 .trend__axis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--faint); }
 
 /* ── Report: quiet state (nothing in the period, or before the first sync) ── */
@@ -297,6 +295,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .quiet h2 { margin-bottom: 6px; }
 .quiet p { max-width: 520px; margin: 0 auto; color: var(--muted); }
 .quiet .row { justify-content: center; margin-top: 18px; }
+/* Report: "Check HubSpot now" under the last card */
+.report-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.report-foot .spinner { width: 14px; height: 14px; vertical-align: -2px; }
 
 /* ── Copy box (booking link) ── */
 .copy { display: flex; gap: 8px; align-items: center; }
@@ -443,7 +444,7 @@ span.flatpickr-weekday { color: var(--muted); font-weight: 600; font-size: 12px;
   .kpi:nth-child(3n) { border-right: 0; }
   .kpi:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
   .away__grid { grid-template-columns: 1fr 1fr; }
-  .steps { grid-template-columns: 1fr 1fr; }
+  .steps { grid-template-columns: 1fr; }
 }
 @media (max-width: 767px) {
   .hdr { padding: 0 12px; gap: 10px; font-size: 13px; }

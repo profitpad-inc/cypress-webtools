@@ -107,7 +107,9 @@ function decide({ now, settings, reps, contact, recent, email, given }) {
     const note = skipped.length ? `, skipped ${skipped.map((s) => `${s.name} (${s.why})`).join(', ')}` : '';
     return pick(rep, 'rotation', `${lead}next in the rotation${note}.`, { skipped });
   }
-  return { ...base, skipped, rep_id: null, rep_name: '', url: '', route: 'none', reason: `${lead}nobody in the rotation is available with a meeting link.` };
+  // "..., and nobody in the rotation was available." (wording 2026-10-30, on request)
+  const why = lead.replace(/, so $/, ', and ');
+  return { ...base, skipped, rep_id: null, rep_name: '', url: '', route: 'none', reason: `${why}nobody in the rotation was available.` };
 }
 
 const v = $('Validate').first().json;
