@@ -8,14 +8,17 @@
   <link rel="icon" href="../favicon.png" type="image/png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;500;600&display=swap">
-  <link rel="stylesheet" href="../styles.css">
+  <!-- Poppins: the font of Nibly's own HubSpot forms (the booking page copies their look, 2026-10-30) -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="../styles.css?v=20261030b"><!-- bump v when styles.css changes: the customer page must not use a cached copy -->
 </head>
 <body data-base="../">
   <!--
     The universal round robin booking link. Customer-facing, so no header bar.
     ?email= (HubSpot: ?email={{ contact.email }}) or ?cid= (contact id) sends a known contact to their owner's
     meeting link; anyone else goes to the next rep in the rotation. The n8n book flow decides and logs the visit.
+    Without an email (or cid) in the link the page asks for one first. Every other query parameter (utm_*, gclid,
+    fbclid, ...) is passed on to the meeting link (2026-10-30, on request).
   -->
   <main class="book">
     <div class="card" id="box">
@@ -24,24 +27,45 @@
       <p><span class="spinner"></span>&nbsp; Opening their calendar&hellip;</p>
     </div>
   </main>
-  <script src="../app.js"></script>
+  <script src="../app.js?v=20261030b"></script>
   <script>
     (function () {
       var params = new URLSearchParams(location.search);
+      var OWN = ['email', 'e', 'cid', 'firstname', 'lastname', 'firstName', 'lastName', 'first_name', 'last_name'];
+      var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      // an unfilled HubSpot token ({{ contact.email }}) is not a value
+      function val(k) { var v = (params.get(k) || '').trim(); return v.indexOf('{{') < 0 ? v : ''; }
+      // '+' in a query string reads as a space, so ?email=jane+1@x.com arrives as "jane 1@x.com" and the page asked for
+      // an email it already had (2026-10-30); emails can't hold spaces, so put the '+' back (book-validate.js does too)
+      function emailVal(k) { return val(k).replace(/ /g, '+'); }
       var q = [];
-      ['email', 'cid', 'firstname', 'lastname', 'firstName', 'lastName', 'first_name', 'last_name'].forEach(function (k) {
-        var v = (params.get(k) || '').trim();
-        // an unfilled HubSpot token ({{ contact.email }}) is not an email
-        if (v && v.indexOf('{{') < 0) q.push(k + '=' + encodeURIComponent(v));
+      OWN.forEach(function (k) {
+        var v = k === 'email' || k === 'e' ? emailVal(k) : val(k);
+        if (v) q.push(k + '=' + encodeURIComponent(v));
       });
+
+      // Everything else on the link (UTMs, click ids, ...) goes on to the meeting link, without replacing a parameter
+      // the link already has (its own, or the email / name prefill).
+      function passThrough(url) {
+        var extra = [];
+        params.forEach(function (v, k) {
+          if (OWN.indexOf(k) < 0 && v.indexOf('{{') < 0) extra.push([k, v]);
+        });
+        if (!extra.length) return url;
+        try {
+          var u = new URL(url);
+          extra.forEach(function (kv) { if (!u.searchParams.has(kv[0])) u.searchParams.append(kv[0], kv[1]); });
+          return u.href;
+        } catch (e) { return url; }
+      }
       function fail(msg) {
         document.getElementById('box').innerHTML = '<img src="../favicon.png" alt=""><h1>Sorry, booking isn\'t available right now</h1>' +
-          '<p>' + CW.esc(msg) + '</p><button class="btn" type="button" onclick="location.reload()">Try again</button>';
+          '<p>' + CW.esc(msg) + '</p><button class="book__btn" type="button" onclick="location.reload()">Try again</button>';
       }
       function go() {
         CW.api('GET', 'book' + (q.length ? '?' + q.join('&') : '')).then(function (d) {
           if (!d.url) return fail('Please try again in a little while.');
-          location.replace(d.url);
+          location.replace(passThrough(d.url));
         }).catch(function (e) {
           fail(e.status === 503 ? 'Nobody is available to book at the moment. Please try again later.' : 'Please try again in a little while.');
         });
@@ -49,8 +73,41 @@
       // Chrome prerenders pages it expects you to open (typing in the address bar, hovering a link) and runs their
       // scripts then. Each call moves the rotation, so wait until the page is really shown (2026-10-30: every visit
       // was logged twice, the first with Sec-Purpose: prefetch;prerender).
-      if (document.prerendering) document.addEventListener('prerenderingchange', go, { once: true });
-      else go();
+      // No email (or contact id) on the link: ask for one first, so the visitor can go to their owner and the
+      // scheduler is prefilled.
+      function askEmail() {
+        var box = document.getElementById('box');
+        box.innerHTML = '<img src="../favicon.png" alt=""><h1>Book a meeting</h1>' +
+          '<p>Enter your email and we\'ll open the right person\'s calendar.</p>' +
+          '<form class="book__form" id="email-form" novalidate>' +
+            '<label class="book__label" for="email">Email<span class="book__req" aria-hidden="true">*</span></label>' +
+            '<input class="book__input" type="email" id="email" autocomplete="email" inputmode="email" required aria-required="true" aria-describedby="email-err">' +
+            '<div class="book__err" id="email-err" role="alert" hidden>Please enter a valid email address.</div>' +
+            '<button class="book__btn" type="submit">Continue</button>' +
+          '</form>';
+        var input = document.getElementById('email');
+        input.focus();
+        document.getElementById('email-form').addEventListener('submit', function (e) {
+          e.preventDefault();
+          var email = input.value.trim();
+          var bad = !EMAIL_RE.test(email);
+          document.getElementById('email-err').hidden = !bad;
+          input.setAttribute('aria-invalid', bad ? 'true' : 'false');
+          if (bad) { input.focus(); return; }
+          q.push('email=' + encodeURIComponent(email));
+          // keep it on the address, so a reload or the back button doesn't ask again
+          params.set('email', email);
+          try { history.replaceState(null, '', '?' + params.toString() + location.hash); } catch (err) { /* file:// */ }
+          box.innerHTML = '<img src="../favicon.png" alt=""><h1>Finding the right person for you</h1>' +
+            '<p><span class="spinner"></span>&nbsp; Opening their calendar&hellip;</p>';
+          go();
+        });
+      }
+
+      var hasEmail = EMAIL_RE.test(emailVal('email') || emailVal('e')) || /^\d{1,20}$/.test(val('cid'));
+      var start = hasEmail ? go : askEmail;
+      if (document.prerendering) document.addEventListener('prerenderingchange', start, { once: true });
+      else start();
     })();
   </script>
 </body>

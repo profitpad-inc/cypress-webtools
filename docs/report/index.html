@@ -33,9 +33,18 @@
 
     <div id="banners" class="row" style="flex-direction:column;align-items:stretch;gap:12px"></div>
 
-    <section class="card"><div class="kpis" id="kpis"></div></section>
+    <!-- Shown instead of everything below when the period has no leads, owner changes or visits (2026-10-30). -->
+    <section class="card quiet" id="quiet" hidden></section>
 
-    <section class="card">
+    <section class="card" id="kpi-card"><div class="kpis kpis--lead" id="kpis"></div></section>
+
+    <!-- Leads per day, for ranges longer than a day -->
+    <section class="card" id="trend-card" hidden>
+      <div class="card-head"><div><h2>Leads per day</h2><p>New leads by result. Hover a day for the numbers.</p></div></div>
+      <div class="trend" id="trend"></div>
+    </section>
+
+    <section class="card" id="leads-card">
       <div class="card-head">
         <div>
           <h2 id="leads-title">Leads</h2>
@@ -52,9 +61,9 @@
       <div class="table-wrap" id="leads"><div class="loading"><span class="spinner"></span></div></div>
     </section>
 
-    <div class="split">
+    <div class="split" id="split">
       <section class="card">
-        <div class="card-head"><div><h2>By rep</h2><p>Leads and booking link visits in this period.</p></div></div>
+        <div class="card-head"><div><h2>By rep</h2><p>Each rep's share of assigned leads, and their booking link visits.</p></div></div>
         <div class="table-wrap" id="by-rep"></div>
       </section>
       <section class="card">
@@ -63,7 +72,7 @@
       </section>
     </div>
 
-    <section class="card">
+    <section class="card" id="book-card">
       <div class="card-head">
         <div><h2 id="book-title">Booking link visits</h2><p>Who opened the universal booking link and which rep's calendar they were sent to.</p></div>
         <a class="btn btn--ghost btn--sm" href="../settings/#booking">Get the link</a>
@@ -97,15 +106,40 @@
         none: ['tag--bad', 'Nobody available'],
       };
       var short = { month: 'short', day: 'numeric' };
+      // One box for a day or a range (2026-10-30: it used to show only the last day, even for 30 days). Two clicks
+      // pick a range; one click then closing the calendar picks that day.
       var dayPicker = CW.datePicker(document.getElementById('day'), {
-        label: 'Day',
-        onChange: function (d, str) { if (str && str !== state.to) setRange(str); },
+        range: true, label: 'Days',
+        onChange: function (d, str, fp) {
+          var sel = fp.selectedDates;
+          if (sel.length === 2) setRange(CW.dayString(sel[0]), CW.dayString(sel[1]));
+        },
+        onClose: function (d, str, fp) {
+          var sel = fp.selectedDates;
+          if (sel.length === 1) setRange(CW.dayString(sel[0]));
+          else if (!sel.length) setRange(state.from, state.to);
+        },
       });
+
+      // days in the range, so the arrows step by the range (a day, a week, 30 days)
+      function rangeDays() { return Math.round((CW.parseDay(state.to) - CW.parseDay(state.from)) / 86400000) + 1; }
 
       function setRange(from, to) {
         state.from = from;
         state.to = to || from;
-        if (dayPicker) dayPicker.setDate(state.to, false); else document.getElementById('day').value = state.to;
+        var single = state.from === state.to;
+        if (dayPicker) {
+          dayPicker.setDate(single ? [state.from] : [state.from, state.to], false);
+          if (dayPicker.altInput) dayPicker.altInput.classList.toggle('date-range', !single);
+        } else document.getElementById('day').value = single ? state.from : state.from + ' to ' + state.to;
+        var n = rangeDays();
+        var stepLabel = n === 1 ? 'day' : n + ' days';
+        ['prev', 'next'].forEach(function (id) {
+          var label = (id === 'prev' ? 'Previous ' : 'Next ') + stepLabel;
+          var b = document.getElementById(id);
+          b.title = label;
+          b.setAttribute('aria-label', label);
+        });
         var today = CW.dayString(new Date());
         var quick = state.from === state.to
           ? (state.from === today ? 'today' : state.from === CW.addDays(today, -1) ? 'yesterday' : '')
@@ -138,6 +172,8 @@
         var rows = d.assignments || [];
         var books = d.bookings || [];
         var now = Date.now();
+        // nothing in the period: one card instead of six zeros and three empty tables (set before the banners)
+        state.quiet = !rows.length && !books.length && !(d.overwrites || []).length;
         renderBanners(d, now);
 
         var assigned = rows.filter(function (a) { return a.status === 'assigned'; }).length;
@@ -148,17 +184,24 @@
         var period = state.from === state.to
           ? dayLabel(state.from, { weekday: 'long', month: 'short', day: 'numeric' })
           : dayLabel(state.from, short) + ' to ' + dayLabel(state.to, short);
+        var quiet = state.quiet;
+        renderQuiet(quiet, d, period);
+        ['kpi-card', 'leads-card', 'split', 'book-card'].forEach(function (id) { document.getElementById(id).hidden = quiet; });
+        if (quiet) { document.getElementById('trend-card').hidden = true; return; }
+
+        // New leads and Assigned are the main tiles; the rest are smaller (.kpi--main)
         document.getElementById('kpis').innerHTML = [
-          ['New leads', rows.length, period],
-          ['Assigned', assigned, pct(assigned)],
+          ['New leads', rows.length, period, true],
+          ['Assigned', assigned, pct(assigned), true],
           ['Kept existing owner', kept, pct(kept)],
           ['Not assigned', unassigned, unassigned ? 'paused, nobody free or errors' : ' '],
           ['Owner changed later', overwritten, pct(overwritten)],
           ['Booking link visits', books.length, books.length ? books.filter(function (b) { return b.route === 'owner'; }).length + ' to their owner' : ' '],
         ].map(function (k) {
-          return '<div class="kpi"><div class="kpi__lbl">' + esc(k[0]) + '</div><div class="kpi__val">' + k[1] + '</div><div class="kpi__sub">' + esc(k[2]) + '</div></div>';
+          return '<div class="kpi' + (k[3] ? ' kpi--main' : '') + '"><div class="kpi__lbl">' + esc(k[0]) + '</div><div class="kpi__val">' + k[1] + '</div><div class="kpi__sub">' + esc(k[2]) + '</div></div>';
         }).join('');
 
+        renderTrend(rows);
         renderLeads(rows);
         renderByRep(rows, books, d.reps || [], now);
         renderChanges(d.overwrites || []);
@@ -180,7 +223,7 @@
             return esc(r.name) + ' (back ' + esc(CW.fmtDate(r.away_until, short)) + (r.away_reason ? ', ' + esc(r.away_reason) : '') + ')';
           }).join(', ') + '</div></div>');
         }
-        if (!s.list_initialized) {
+        if (!s.list_initialized && !state.quiet) {
           html.push('<div class="alert alert--info"><div class="grow"><strong>Waiting for the first sync.</strong> Once the round robin is switched on, new leads from the HubSpot list show up here within a couple of minutes.</div></div>');
         } else if (s.last_poll_error) {
           html.push('<div class="alert alert--error"><div class="grow"><strong>The last sync had a problem:</strong> ' + esc(s.last_poll_error) + '</div></div>');
@@ -190,6 +233,60 @@
         var el = document.getElementById('banners');
         el.innerHTML = html.join('');
         el.hidden = !html.length;
+      }
+
+      function renderQuiet(quiet, d, period) {
+        var el = document.getElementById('quiet');
+        el.hidden = !quiet;
+        if (!quiet) return;
+        var s = d.settings || {};
+        var next = CW.nextUp(d.reps || [], s);
+        var nextLine = next ? ' The next lead goes to <span class="strong">' + esc(next.name) + '</span>.' : '';
+        el.innerHTML = !s.list_initialized
+          ? '<h2>Waiting for the first sync</h2><p>Once the round robin is switched on, new leads from the ' +
+              '<a class="xlink" href="' + CW.LIST_URL + '" target="_blank" rel="noopener">HubSpot list' + CW.EXT_ICON + '</a> show up here within a couple of minutes.' + nextLine + '</p>' +
+              '<div class="row"><a class="btn btn--ghost btn--sm" href="../settings/">Check the rotation</a></div>'
+          : '<h2>Nothing in this period</h2><p>No new leads, owner changes or booking link visits for ' + esc(period) + '.' + nextLine + '</p>' +
+              (rangeDays() < 30 ? '<div class="row"><button class="btn btn--ghost btn--sm" type="button" id="quiet-30">Show the last 30 days</button></div>' : '');
+        var more = document.getElementById('quiet-30');
+        if (more) more.onclick = function () { var t = CW.dayString(new Date()); setRange(CW.addDays(t, -29), t); };
+      }
+
+      // Leads per day for ranges over a day: stacked bars (assigned, kept owner, not assigned), the leads table is the
+      // table view. Colors are the page's own teal, dark teal and amber (validated for color blindness 2026-10-30).
+      function renderTrend(rows) {
+        var card = document.getElementById('trend-card');
+        card.hidden = state.from === state.to || !rows.length;
+        if (card.hidden) return;
+        var days = [], byDay = {};
+        for (var day = state.from; day <= state.to; day = CW.addDays(day, 1)) {
+          days.push(day);
+          byDay[day] = { assigned: 0, kept: 0, none: 0 };
+        }
+        rows.forEach(function (a) {
+          var b = byDay[CW.dayString(new Date(a.created_at))];
+          if (!b) return;
+          if (a.status === 'assigned') b.assigned++;
+          else if (a.status === 'kept_existing') b.kept++;
+          else b.none++;
+        });
+        var max = Math.max.apply(null, days.map(function (k) { var b = byDay[k]; return b.assigned + b.kept + b.none; })) || 1;
+        var PLOT = 112; // px for the tallest day, under the 120px plot
+        var seg = function (n, cls) { return n ? '<span class="trend__seg ' + cls + '" style="height:' + Math.max(2, Math.round(n * PLOT / max)) + 'px"></span>' : ''; };
+        var bars = days.map(function (k) {
+          var b = byDay[k], total = b.assigned + b.kept + b.none;
+          var tip = dayLabel(k, { weekday: 'short', month: 'short', day: 'numeric' }) + ': ' + total + (total === 1 ? ' lead' : ' leads') +
+            (total ? ' (' + [[b.assigned, 'assigned'], [b.kept, 'kept owner'], [b.none, 'not assigned']].filter(function (p) { return p[0]; })
+              .map(function (p) { return p[0] + ' ' + p[1]; }).join(', ') + ')' : '');
+          return '<div class="trend__day" title="' + esc(tip) + '" aria-label="' + esc(tip) + '" role="img">' +
+            seg(b.assigned, 'seg--assigned') + seg(b.kept, 'seg--kept') + seg(b.none, 'seg--none') + '</div>';
+        }).join('');
+        var mid = days[Math.floor((days.length - 1) / 2)];
+        document.getElementById('trend').innerHTML =
+          '<div class="trend__legend"><span><i class="seg--assigned"></i>Assigned</span><span><i class="seg--kept"></i>Kept existing owner</span><span><i class="seg--none"></i>Not assigned</span></div>' +
+          '<div class="trend__plot"><span class="trend__max">' + max + '</span>' + bars + '</div>' +
+          '<div class="trend__axis"><span>' + esc(dayLabel(days[0], short)) + '</span>' + (days.length > 2 ? '<span>' + esc(dayLabel(mid, short)) + '</span>' : '') +
+            '<span>' + esc(dayLabel(days[days.length - 1], short)) + '</span></div>';
       }
 
       function contactCell(id, name, email) {
@@ -254,16 +351,20 @@
         var byOwner = {};
         reps.forEach(function (r) { byOwner[r.hs_owner_id] = r; });
         var n = state.namer;
-        document.getElementById('by-rep').innerHTML = '<table class="compact"><thead><tr><th>Rep</th><th>Status</th><th class="num">Leads</th>' +
+        var total = 0;
+        Object.keys(counts).forEach(function (id) { total += counts[id]; });
+        // Share of assigned leads as a bar (replaced the Status column 2026-10-30, on request; status is on
+        // Settings, and only an unusual one shows here, under the name).
+        document.getElementById('by-rep').innerHTML = '<table class="compact"><thead><tr><th>Rep</th><th>Share of leads</th><th class="num">Leads</th>' +
           '<th class="num" title="Leads assigned to them whose owner someone changed later">Changed</th><th class="num">Bookings</th></tr></thead><tbody>' +
           ids.map(function (id) {
             var r = byOwner[id];
-            var status = !r ? '<span class="tag tag--off">Removed</span>'
-              : !r.enabled ? '<span class="tag tag--off">Off</span>'
-              : CW.isAway(r, now) ? '<span class="tag tag--warn">Out until ' + esc(CW.fmtDate(r.away_until, short)) + '</span>'
-              : '<span class="tag tag--ok">In rotation</span>';
-            return '<tr><td class="strong nowrap">' + esc(r ? r.name : n.owner(id)) + '</td><td>' + status + '</td><td class="num">' + (counts[id] || 0) +
-              '</td><td class="num">' + (lost[id] || 0) + '</td><td class="num">' + (booked[id] || 0) + '</td></tr>';
+            var note = !r ? 'Removed' : !r.enabled ? 'Off' : CW.isAway(r, now) ? 'Out until ' + CW.fmtDate(r.away_until, short) : '';
+            var share = total ? Math.round((counts[id] || 0) * 100 / total) : 0;
+            return '<tr><td class="nowrap"><span class="strong">' + esc(r ? r.name : n.owner(id)) + '</span>' + (note ? '<div class="faint">' + esc(note) + '</div>' : '') + '</td>' +
+              '<td><div class="share"><span class="share__track"><span class="share__bar" style="width:' + share + '%"></span></span>' +
+                '<span class="share__pct">' + (total ? share + '%' : '') + '</span></div></td>' +
+              '<td class="num">' + (counts[id] || 0) + '</td><td class="num">' + (lost[id] || 0) + '</td><td class="num">' + (booked[id] || 0) + '</td></tr>';
           }).join('') + '</tbody></table>';
       }
 
@@ -300,8 +401,8 @@
       }
 
       document.getElementById('filter').addEventListener('change', function () { if (state.data) renderLeads(state.data.assignments || []); });
-      document.getElementById('prev').addEventListener('click', function () { setRange(CW.addDays(state.to, -1)); });
-      document.getElementById('next').addEventListener('click', function () { setRange(CW.addDays(state.to, 1)); });
+      document.getElementById('prev').addEventListener('click', function () { var n = rangeDays(); setRange(CW.addDays(state.from, -n), CW.addDays(state.to, -n)); });
+      document.getElementById('next').addEventListener('click', function () { var n = rangeDays(); setRange(CW.addDays(state.from, n), CW.addDays(state.to, n)); });
       document.getElementById('quick').addEventListener('click', function (e) {
         var r = e.target.getAttribute('data-range');
         if (!r) return;

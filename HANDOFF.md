@@ -33,7 +33,7 @@ never reverted; **no sign-in** for the demo.
 | `rr-watch-overwrites` | **Live** (every 5 min). Has nothing to read until `rr-assign` runs. Not yet seen against real owner history |
 | `rr-assign` | **Deployed, not published** (it writes owners in Cypress's live HubSpot). Needs the user's go-ahead. Never run yet |
 | `setup-db` | Run once 2026-10-30, then unpublished. Held by `deploy_flows.py` |
-| Site (`docs/`) | **Restyled 2026-10-30** to Fairbank order placement's light look (§7). Scripts syntax-checked, helpers tested in node. Not opened in a browser (AGENTS rule). The first version is pushed to `profitpad-inc/cypress-webtools`; the user is enabling GitHub Pages (`/docs` on `main`). The restyle is not committed yet |
+| Site (`docs/`) | **Restyled 2026-10-30** to Fairbank order placement's light look (§7). Scripts syntax-checked, helpers tested in node. Report and Settings **opened in the browser pane 2026-10-30** (on request, desktop and phone widths) after the layout pass in §7.2; the report's chart, KPIs and share bars were checked with fake data patched into the page, not real leads. The first version is pushed to `profitpad-inc/cypress-webtools`; the user is enabling GitHub Pages (`/docs` on `main`). The restyle is not committed yet |
 | HubSpot scopes | `crm.objects.owners.read` and `crm.lists.read` added by the user 2026-10-30 (owners now load: 10 active owners). Contacts read works. **Unverified:** contacts write (`crm.objects.contacts.write`), needed by `rr-assign` |
 
 ## 3. Layout
@@ -156,22 +156,71 @@ calendar icon (`.date-alt`), `disableMobile` keeps the themed calendar on phones
 typed in (tap to open). Used for the report's day, Pause until (with time, from today) and time off (Back on can't be
 before the day after Out from). Not checked in a browser.
 
-- **Report** (`report/`): date / quick ranges, KPIs (incl. booking link visits), leads with reason and later owner
-  changes, by-rep counts (leads, changed later, bookings), owner changes, booking link visits, banners (paused, reps
-  out, waiting for first sync, sync errors or stale).
+- **Report** (`report/`): date / quick ranges, KPIs (incl. booking link visits), leads per day chart, leads with reason and later owner
+  changes, by-rep counts (share of leads, leads, changed later, bookings), owner changes, booking link visits, banners (paused, reps
+  out, sync errors or stale). See §7.2 for the layout pass.
 - **Settings** (`settings/`): pause / resume (2026-10-30, on request: a "Pause assignment" button in the card head;
   Pause until and Reason open below only after it's clicked; while paused, the card says until when and why, with
   Resume now). The skip-if-owned switch was removed from the page the same day, on request ("remove this setting for
   now"); `skip_if_owned` stays true in the database (checked 2026-10-30), so leads that already have an owner keep them,
-  and the `settings` endpoint still accepts it. Rotation (order, on/off, meeting link saved on
+  and the `settings` endpoint still accepts it. Rotation (layout changed 2026-10-30, see §7.2; order, on/off, meeting link saved on
   change, **Working hours** link to `https://app.hubspot.com/settings/22691627/users/user/{hs_user_id}?tab=preferencesTab&subtab=workingHours`
   (user id from the rep row, else from the owners list; hidden when unknown, e.g. Mac Mills, who isn't an active owner),
   **Boost** (number of next leads, End boost; "Boosted: N left" tag), time off, remove, "Next" badge mirroring the Plan logic; reps without a link are flagged as skipped by the
   booking link), the booking link card (`#booking`, copy buttons), add rep from HubSpot owners (since 2026-10-30, on request, an **Add rep** button in the Rotation card's footer, bottom left, that opens the search and meeting link fields in place, with Cancel; the separate "Add a rep" card is gone). Next to it, **Edit order** shows the up / down arrows column and each rep's Remove (both hidden otherwise) and turns into **Done** (2026-10-30, on request). Links to the HubSpot list.
 
+### 7.2 Layout pass (2026-10-30, on request: "do everything except C")
+
+Font, colors and header bar unchanged (user's rule). Option C (short meeting link labels with a pencil) was **not** done.
+- **Settings, status:** one status in the Automatic assignment card: "Waiting for first sync" (gray) until
+  `list_initialized`, then "Running", with "Last checked HubSpot …" under the card text. The page-head "Round robin not
+  switched on yet" text is gone (it contradicted the Running tag).
+- **Settings, rotation:** the Status column is gone; tags sit under the rep's email and show only when unusual (Out until,
+  Out later, Boosted, No meeting link). Off is shown by the switch and the dimmed name. Columns (2026-10-30, on request):
+  Rep (sized to its content), Meeting link (400px) right beside it, then Working hours, Boost, Time off (and Remove in
+  Edit order) right aligned, then the switch, labelled **In rotation**, at the far right. A "⋯" menu for Boost and
+  Working hours was tried the same day and taken out again on request. Under 768px the table becomes one stacked card
+  per rep (`.rot` CSS): name and switch, link, buttons (they wrap); arrows on the left in Edit order.
+- **Settings, booking link:** "How it picks a rep" as 4 numbered steps in `book-decide.js` order (repeat, owner,
+  rotation or boost, nobody), with one note line under them; replaced the bullets and the "Existing contacts …" hint.
+- **Report, dates:** one Flatpickr range box (`CW.datePicker(el, {range: true})`, `onClose` added): two clicks pick a
+  range, one click then closing picks a day; it shows "Oct 1, 2026 to Oct 30, 2026". The arrows step by the range's
+  length ("Previous 7 days").
+- **Report, KPIs:** New leads and Assigned are larger (`.kpis--lead`, `.kpi--main`); the other four are smaller.
+- **Report, leads per day:** for ranges over a day with leads, stacked HTML bars per day (Assigned #0091ae, Kept
+  existing owner #1c484a, Not assigned #b36b00), legend, hover title with the counts, max label, first / middle / last
+  day labels. These three colors passed the dataviz validator's color blindness, normal vision and contrast checks; #1c484a
+  fails its lightness / chroma band (it's the existing dark teal, kept by the no-new-colors rule).
+- **Report, By rep:** Status column replaced by "Share of leads" (bar and % of assigned leads); Removed / Off / Out until
+  shows under the name only when it applies.
+- **Report, quiet state:** when the period has no leads, owner changes or visits, one card replaces the KPIs and all
+  tables: "Waiting for the first sync" (before `list_initialized`, with the next rep and a link to Settings) or "Nothing
+  in this period" (with "Show the last 30 days" for shorter ranges). The waiting banner is skipped then.
+- Preview: `.claude/launch.json` points the browser pane at `http://localhost:8765`; the pane can't start a server in
+  `~/Desktop` (permission error), so start it from a shell: `cd docs && /usr/bin/python3 -I -m http.server 8765`.
+
 ### 7.1 Universal booking link (`book/`)
 
-`https://profitpad-inc.github.io/cypress-webtools/book/` (assuming the default Pages domain). In HubSpot emails:
+`https://profitpad-inc.github.io/cypress-webtools/book/` (assuming the default Pages domain). **Public link: `https://nibly.ca/meet`** (2026-10-30: the user
+set up a page there that `location.replace()`s to `.../cypress-webtools/book/` plus the query string and hash, checked with
+curl; its meta refresh fallback drops the query). Settings always shows the nibly link (`BOOK_URL` in `app.js`), with
+`?email={{ contact.email }}&firstname=...&lastname=...` for HubSpot.
+**Email prompt and pass-through** (2026-10-30, on request, done in `docs/book/index.html` only; the `book` flow is
+unchanged): without a valid `email` (or `e`) or a numeric `cid` on the link (an unfilled `{{ }}` token counts as none),
+the page shows "Book a meeting" with a required email box first, then puts the email on the address
+(`history.replaceState`) and calls the flow. After the flow answers, every other query parameter on the link (UTMs,
+gclid, fbclid, anything not `email`, `e`, `cid` or a first / last name key) is appended to the meeting link, unless the
+link already has that parameter. Checked in the browser with `CW.api` stubbed (no visit logged): bad email shows an
+error, `jane+1@example.com` reached the API as `%2B`, `utm_campaign` and `gclid` were appended and the link's own
+`utm_source` was kept. Not checked: a link that already has an email (it skips the prompt and calls the live flow).
+**Booking page look** (2026-10-30, on request): the booking card copies Nibly's own HubSpot form on nibly.ca, not the
+tool's look: Poppins (Google Fonts, `book/` only), a rgb(245,246,242) panel with square corners and 40px padding, 20px
+#212d3a labels with a red asterisk, white inputs (#959494 border, 3px corners, 12px padding), a black bold 20px button,
+centered, errors in #e51520. CSS is the `.book` block in `styles.css`; the loading and error screens use the same panel, with a black / gray
+spinner. Checked in the browser (empty, error and loading states). `book/index.html` loads `styles.css?v=…` and
+`app.js?v=…`: bump `v` when either changes, since a cached old `styles.css` showed the old look (seen 2026-10-30).
+The `+` in a link's email (`?email=jane+1@x.com`, read as a space) is put back on the page too, or it asked for an
+email it already had (fixed 2026-10-30; checked with sample query strings in node, not on the live page). In HubSpot emails:
 `.../book/?email={{ contact.email }}` (an unfilled `{{` token is ignored). Customer-facing page, no header: it calls the
 `book` flow and `location.replace()`s to the answer. Decision (`flows_src/book-decide.js`):
 1. same email within a day and that rep still has a link and isn't out: same rep (`repeat`), so a double click doesn't

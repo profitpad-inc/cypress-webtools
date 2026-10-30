@@ -18,7 +18,6 @@
         <h1>Round robin settings</h1>
         <p>Who is in the rotation, who is out of office, and whether leads are assigned automatically.</p>
       </div>
-      <div class="faint" id="sync"></div>
     </div>
 
     <div id="load-error" hidden></div>
@@ -28,6 +27,7 @@
         <div>
           <h2>Automatic assignment</h2>
           <p>New contacts in the <a class="xlink" id="list-link" target="_blank" rel="noopener">HubSpot round robin list</a> get an owner within a couple of minutes.</p>
+          <div class="faint" id="sync"></div>
         </div>
         <div class="row" id="run-state"></div>
       </div>
@@ -38,7 +38,6 @@
       <div class="card-head">
         <div>
           <h2>Rotation</h2>
-          <p>Leads and booking link visitors go to each rep in this order. Reps who are off or out of office are skipped.</p>
         </div>
         <div id="next-up"></div>
       </div>
@@ -76,7 +75,6 @@
       <div class="card-head">
         <div>
           <h2>Round robin booking link</h2>
-          <p>One link for every customer. It opens the right rep's meeting link.</p>
         </div>
       </div>
       <div class="card-body">
@@ -91,14 +89,19 @@
             <input class="input" type="text" id="book-url-hs" readonly>
             <button class="btn btn--ghost" type="button" data-copy="book-url-hs">Copy</button>
           </div>
-          <span class="faint">Existing contacts go straight to their owner's calendar.</span>
         </label>
-        <ul class="muted" style="margin:16px 0 0;padding-left:18px">
-          <li>A contact with an owner goes to their owner's meeting link, unless that rep is out of office or has no link.</li>
-          <li>Anyone else goes to whoever is next in the rotation (or boosted) and has a meeting link. Visits don't move the rotation; only assigned leads do.</li>
-          <li>The same email opening it again within a day goes back to the same rep. Each visit is on the report.</li>
-          <li>The scheduler opens with their name and email filled in, from <code>email</code>, <code>firstname</code> and <code>lastname</code> on the link or from HubSpot.</li>
-        </ul>
+        <!-- How the link picks a rep, in the order book-decide.js checks (2026-10-30, on request: steps instead of bullets). -->
+        <div class="divider">
+          <h3>How it picks a rep</h3>
+          <ol class="steps">
+            <li><span class="steps__n">1</span><div><strong>Same email again within a day</strong><span>Same rep as last time</span></div></li>
+            <li><span class="steps__n">2</span><div><strong>Has an owner in HubSpot</strong><span>Their owner's meeting link</span></div></li>
+            <li><span class="steps__n">3</span><div><strong>Anyone else</strong><span>Next rep in the rotation, or a boosted rep</span></div></li>
+            <li><span class="steps__n">4</span><div><strong>Nobody available</strong><span>A "try again later" page</span></div></li>
+          </ol>
+          <p class="faint" style="margin:12px 0 0">Reps who are out of office or have no meeting link are passed over. Visits don't move the rotation; only assigned leads do. Each visit is on the report.
+            The scheduler opens with the name and email filled in, from <code>email</code>, <code>firstname</code> and <code>lastname</code> on the link or from HubSpot.</p>
+        </div>
       </div>
     </section>
 
@@ -159,9 +162,7 @@
 
       function render() {
         var s = state.settings;
-        document.getElementById('sync').textContent = !s.list_initialized
-          ? 'Round robin not switched on yet'
-          : 'Last checked HubSpot ' + CW.ago(s.last_poll_at);
+        document.getElementById('sync').textContent = s.list_initialized ? 'Last checked HubSpot ' + CW.ago(s.last_poll_at) : '';
         renderAssignment();
         renderReps();
         renderOwnerResults();
@@ -170,14 +171,19 @@
       // ── pause / resume ──────────────────────────────────────────────────
       // Running: a "Pause assignment" button in the card head; the pause options open below only when it's clicked.
       // Paused: the card body says until when and why, with Resume now.
+      // One status only: "Waiting for first sync" until rr-assign has read the list once, then "Running" (the page
+      // head used to say "not switched on yet" beside a Running tag; merged 2026-10-30).
       // (The skip-if-owned switch was removed 2026-10-30, on request; the setting stays on: existing owners are kept.)
       function renderAssignment() {
         var s = state.settings;
         var paused = CW.isPaused(s, Date.now());
         if (paused) state.pauseOpen = false;
+        var running = s.list_initialized
+          ? '<span class="tag tag--ok">Running</span>'
+          : '<span class="tag tag--gray" title="The round robin hasn\'t read the HubSpot list yet">Waiting for first sync</span>';
         document.getElementById('run-state').innerHTML = paused
           ? '<span class="tag tag--warn">Paused</span>'
-          : '<span class="tag tag--ok">Running</span>' + (state.pauseOpen ? '' : '<button class="btn btn--ghost btn--sm" id="pause-open">Pause assignment</button>');
+          : running + (state.pauseOpen ? '' : '<button class="btn btn--ghost btn--sm" id="pause-open">Pause assignment</button>');
         var body = document.getElementById('assignment');
         var html = '';
         if (paused) {
@@ -192,8 +198,8 @@
               '<input type="text" id="pause-until"><span class="faint">Leave empty to pause until resumed</span></label>' +
             '<label class="field grow" style="min-width:220px">Reason' +
               '<input class="input" type="text" id="pause-reason" maxlength="200" placeholder="e.g. Trade show, team offsite"><span class="faint">Shown on the report</span></label>' +
-            '<div class="row field-btn"><button class="btn" id="pause">Pause</button>' +
-              '<button class="btn btn--link" id="pause-cancel">Cancel</button></div></div>';
+            '<div class="row field-btn"><button class="btn btn--sm" id="pause">Pause</button>' +
+              '<button class="btn btn--ghost btn--sm" id="pause-cancel">Cancel</button></div></div>';
         }
         body.innerHTML = html;
         body.hidden = !html;
@@ -225,14 +231,16 @@
       }
 
       // ── rotation ────────────────────────────────────────────────────────
-      function repStatus(r, now) {
-        if (!r.enabled) return '<div class="status"><span class="tag tag--off">Off</span></div>';
+      // Tags under the rep's name, only when something is unusual (the On switch already says in or out; the
+      // separate Status column was merged into the name cell 2026-10-30, on request).
+      function repTags(r, now) {
+        if (!r.enabled) return '';
         if (CW.isAway(r, now)) return '<div class="status"><span class="tag tag--warn">Out until ' + esc(CW.fmtDate(r.away_until, short)) + '</span></div>';
-        var later = CW.awayLater(r, now) ? '<div class="faint">Out ' + esc(CW.fmtDate(r.away_from, short)) + ' to ' + esc(CW.fmtDate(r.away_until, short)) + '</div>' : '';
-        var noLink = r.meeting_link ? '' : '<div class="faint">No meeting link: skipped by the booking link</div>';
-        var boost = r.boost_remaining > 0
-          ? '<span class="tag tag--boost" title="Takes the next leads ahead of the rotation">Boosted: ' + r.boost_remaining + ' left</span>' : '';
-        return '<div class="status"><span class="tag tag--ok">In rotation</span>' + boost + later + noLink + '</div>';
+        var tags = [];
+        if (r.boost_remaining > 0) tags.push('<span class="tag tag--boost" title="Takes the next leads ahead of the rotation">Boosted: ' + r.boost_remaining + ' left</span>');
+        if (CW.awayLater(r, now)) tags.push('<span class="tag tag--gray">Out ' + esc(CW.fmtDate(r.away_from, short)) + ' to ' + esc(CW.fmtDate(r.away_until, short)) + '</span>');
+        if (!r.meeting_link) tags.push('<span class="tag tag--gray" title="Skipped by the booking link until a meeting link is added">No meeting link</span>');
+        return tags.length ? '<div class="status">' + tags.join('') + '</div>' : '';
       }
 
       // HubSpot's working hours page needs the user id: stored when the rep was added from HubSpot users, else
@@ -265,30 +273,31 @@
           var hours = workingHoursUrl(r);
           return '<tr class="rep' + (r.enabled ? '' : ' rep--off') + '" data-id="' + r.id + '">' +
             // up / down arrows only while "Edit order" is on
-            (state.ordering ? '<td style="width:48px"><span class="order">' +
+            (state.ordering ? '<td class="c-order"><span class="order">' +
               '<button class="icon-btn" data-act="up" aria-label="Move up"' + (i === 0 ? ' disabled' : '') + '>&#9650;</button>' +
               '<button class="icon-btn" data-act="down" aria-label="Move down"' + (i === reps.length - 1 ? ' disabled' : '') + '>&#9660;</button>' +
             '</span></td>' : '') +
-            '<td><span class="rep__name">' + esc(r.name || 'Owner ' + r.hs_owner_id) + '</span>' +
+            '<td class="c-name"><span class="rep__name">' + esc(r.name || 'Owner ' + r.hs_owner_id) + '</span>' +
               (next && next.id === r.id ? '<span class="pill-next">Next</span>' : '') +
-              '<div class="faint">' + esc(r.email) + '</div></td>' +
-            '<td>' + repStatus(r, now) + '</td>' +
-            '<td><input class="input link-in" type="url" data-act="link" value="' + esc(r.meeting_link) + '" placeholder="Paste meeting link" aria-label="Meeting link for ' + esc(r.name) + '"></td>' +
-            '<td><label class="switch" title="In the rotation"><input type="checkbox" data-act="enabled"' + (r.enabled ? ' checked' : '') + ' aria-label="' + esc(r.name) + ' in rotation"><span class="switch__track"></span></label></td>' +
-            '<td class="nowrap" style="text-align:right">' +
+              '<div class="faint">' + esc(r.email) + '</div>' + repTags(r, now) + '</td>' +
+            '<td class="c-link"><input class="input link-in" type="url" data-act="link" value="' + esc(r.meeting_link) + '" placeholder="Paste meeting link" aria-label="Meeting link for ' + esc(r.name) + '"></td>' +
+            // Working hours, Boost, Time off as buttons again, and the In rotation switch last (2026-10-30, on request;
+            // a short-lived "⋯" menu held Boost and Working hours)
+            '<td class="c-acts nowrap">' +
               (hours ? '<a class="btn btn--link btn--sm" href="' + esc(hours) + '" target="_blank" rel="noopener" title="Set ' + esc(r.name) + '\'s working hours in HubSpot">Working hours' + CW.EXT_ICON + '</a> ' : '') +
               '<button class="btn btn--ghost btn--sm" data-act="boost">' + (r.boost_remaining > 0 ? 'Edit boost' : 'Boost') + '</button> ' +
-              '<button class="btn btn--ghost btn--sm" data-act="away">' + (hasAway ? 'Edit time off' : 'Time off') + '</button> ' +
-              (state.ordering ? '<button class="btn btn--link btn--sm" data-act="remove">Remove</button>' : '') + '</td>' +
+              '<button class="btn btn--ghost btn--sm" data-act="away">' + (hasAway ? 'Edit time off' : 'Time off') + '</button>' +
+              (state.ordering ? ' <button class="btn btn--link btn--sm" data-act="remove">Remove</button>' : '') + '</td>' +
+            '<td class="c-on"><label class="switch" title="In the rotation"><input type="checkbox" data-act="enabled"' + (r.enabled ? ' checked' : '') + ' aria-label="' + esc(r.name) + ' in rotation"><span class="switch__track"></span></label></td>' +
           '</tr>' +
-          (state.openBoost === r.id ? '<tr class="away" data-panel="boost" data-id="' + r.id + '">' + (state.ordering ? '<td></td>' : '') + '<td colspan="5"><div class="row" style="align-items:flex-end">' +
+          (state.openBoost === r.id ? '<tr class="away" data-panel="boost" data-id="' + r.id + '">' + (state.ordering ? '<td></td>' : '') + '<td colspan="4"><div class="row" style="align-items:flex-end">' +
             '<label class="field" style="width:200px">Next leads for ' + esc(r.name) + '<input class="input" type="number" min="1" max="100" step="1" data-f="boost" value="' + (r.boost_remaining > 0 ? r.boost_remaining : 3) + '"></label>' +
             '<div class="row"><button class="btn btn--sm" data-act="boost-save">' + (r.boost_remaining > 0 ? 'Save' : 'Start boost') + '</button>' +
               (r.boost_remaining > 0 ? '<button class="btn btn--ghost btn--sm" data-act="boost-clear">End boost</button>' : '') +
               '<button class="btn btn--link btn--sm" data-act="boost-cancel">Cancel</button></div>' +
           '</div><div class="faint" style="margin-top:6px">' + esc(r.name) + ' gets the next leads ahead of the rotation until the count runs out, then the rotation carries on where it was. ' +
             'Skipped while they\'re out of office or turned off. Booking link visitors are sent to them while it lasts, but only assigned leads count it down.</div></td></tr>' : '') +
-          (state.openAway === r.id ? '<tr class="away" data-panel="away" data-id="' + r.id + '">' + (state.ordering ? '<td></td>' : '') + '<td colspan="5"><div class="away__grid">' +
+          (state.openAway === r.id ? '<tr class="away" data-panel="away" data-id="' + r.id + '">' + (state.ordering ? '<td></td>' : '') + '<td colspan="4"><div class="away__grid">' +
             '<label class="field">Out from<input type="text" data-f="from" value="' + esc(dateInput(r.away_from) || CW.dayString(new Date())) + '"></label>' +
             '<label class="field">Back on<input type="text" data-f="until" value="' + esc(dateInput(r.away_until)) + '"></label>' +
             '<label class="field">Reason<input class="input" type="text" data-f="reason" maxlength="200" value="' + esc(r.away_reason) + '" placeholder="e.g. Vacation (optional)"></label>' +
@@ -297,7 +306,9 @@
               '<button class="btn btn--link btn--sm" data-act="away-cancel">Cancel</button></div>' +
           '</div><div class="faint" style="margin-top:6px">Skipped from the start of the first day out until the start of the day they\'re back.</div></td></tr>' : '');
         }).join('');
-        document.getElementById('reps').innerHTML = '<table><thead><tr>' + (state.ordering ? '<th></th>' : '') + '<th>Rep</th><th>Status</th><th>Meeting link</th><th>On</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+        // On phones the table turns into one stacked card per rep (CSS, .rot)
+        document.getElementById('reps').innerHTML = '<table class="rot' + (state.ordering ? ' rot--ordering' : '') + '"><thead><tr>' + (state.ordering ? '<th></th>' : '') +
+          '<th>Rep</th><th>Meeting link</th><th></th><th class="c-on">In rotation</th></tr></thead><tbody>' + rows + '</tbody></table>';
         var awayRow = document.querySelector('#reps tr[data-panel="away"]');
         if (awayRow) {
           var fromEl = awayRow.querySelector('[data-f="from"]');

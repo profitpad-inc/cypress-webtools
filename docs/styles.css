@@ -199,8 +199,12 @@ h3 { font-size: 14px; font-weight: 600; }
 .kpi { padding: 16px 20px; border-right: 1px solid var(--border); }
 .kpi:last-child { border-right: 0; }
 .kpi__lbl { font-size: 13px; font-weight: 500; color: var(--muted); }
-.kpi__val { margin-top: 2px; font-size: 26px; font-weight: 600; color: var(--heading); font-variant-numeric: tabular-nums; }
+.kpi__val { margin-top: 2px; font-size: 20px; font-weight: 600; color: var(--heading); font-variant-numeric: tabular-nums; }
 .kpi__sub { font-size: 12px; color: var(--faint); }
+/* New leads and Assigned lead the row; the other four are smaller with a share of leads. */
+.kpis--lead { grid-template-columns: 1.35fr 1.35fr repeat(4, minmax(0, 1fr)); }
+.kpi--main .kpi__lbl { font-size: 14px; color: var(--text); }
+.kpi--main .kpi__val { font-size: 32px; line-height: 1.2; }
 
 /* ── Tables ── */
 .table-wrap { overflow-x: auto; }
@@ -242,12 +246,57 @@ tbody tr:last-child td { border-bottom: 0; }
 .status .faint { line-height: 1.35; }
 .order { display: inline-flex; flex-direction: column; gap: 3px; }
 .order .icon-btn { width: 26px; height: 18px; font-size: 9px; }
-.link-in { min-width: 240px; }
 .away td { background: var(--surface-head) !important; }
 .away__grid { display: grid; grid-template-columns: 1fr 1fr 2fr auto; gap: 12px; align-items: end; }
 /* Card footer (Rotation: Add rep, Edit order and the add-a-rep form). */
 .card-foot { padding: 14px 20px; border-top: 1px solid var(--border); }
 .divider { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+/* Columns: Rep and Meeting link sized to their content on the left, the buttons take the slack (right aligned),
+   the In rotation switch last. */
+.rep .status { flex-direction: row; flex-wrap: wrap; margin-top: 6px; }
+.c-order { width: 48px; }
+.c-name { width: 1%; white-space: nowrap; }
+.c-link { width: 400px; }
+.c-acts { text-align: right; }
+.c-on { width: 1%; white-space: nowrap; text-align: center; }
+.link-in { width: 100%; }
+
+/* Booking link: how it picks a rep, as numbered steps */
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
+.steps li { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; background: var(--surface-head); border: 1px solid var(--border); border-radius: 10px; }
+.steps__n {
+  flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px;
+  font-size: 12px; font-weight: 600; color: #ffffff; background: var(--hs-primary); border-radius: 50%;
+}
+.steps strong { display: block; font-weight: 500; color: var(--heading); line-height: 1.35; }
+.steps span:not(.steps__n) { display: block; margin-top: 2px; font-size: 13px; color: var(--muted); line-height: 1.35; }
+
+/* ── Report: share of leads bar (By rep) ── */
+.share { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.share__track { flex: 1; height: 8px; background: #eaf0f6; border-radius: 4px; overflow: hidden; }
+.share__bar { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.share__pct { width: 34px; font-size: 13px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Report: leads per day (7 and 30 days). Stacked bars, 2px white gaps, rounded top. ── */
+.trend { padding: 16px 20px 14px; }
+.trend__legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+.trend__legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: -1px; }
+.trend__plot { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 120px; border-bottom: 1px solid var(--steel); }
+.trend__max { position: absolute; left: 0; top: -2px; font-size: 12px; color: var(--faint); border-bottom: 1px dashed var(--border); width: 100%; pointer-events: none; line-height: 1; padding-bottom: 2px; }
+.trend__day { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; gap: 2px; cursor: default; }
+.trend__day:hover { background: rgba(0, 145, 174, .06); }
+.trend__seg { display: block; }
+.trend__seg:last-child { border-radius: 4px 4px 0 0; }
+.seg--assigned { background: #0091ae; }
+.seg--kept { background: #1c484a; }
+.seg--none { background: #b36b00; }
+.trend__axis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--faint); }
+
+/* ── Report: quiet state (nothing in the period, or before the first sync) ── */
+.quiet { padding: 40px 24px; text-align: center; }
+.quiet h2 { margin-bottom: 6px; }
+.quiet p { max-width: 520px; margin: 0 auto; color: var(--muted); }
+.quiet .row { justify-content: center; margin-top: 18px; }
 
 /* ── Copy box (booking link) ── */
 .copy { display: flex; gap: 8px; align-items: center; }
@@ -271,12 +320,41 @@ code { padding: 1px 6px; font: 13px ui-monospace, Menlo, monospace; color: var(-
 .toast--bad { background: #c0282f; }
 
 /* ── Booking redirect page ── */
-.book { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
-.book .card { width: 100%; max-width: 440px; padding: 32px 28px; text-align: center; }
+/* Customer-facing, so it copies Nibly's own HubSpot form on nibly.ca (2026-10-30, on request) instead of the tool's
+   look: Poppins, a #f5f6f2 panel with square corners and 40px padding, 20px #212d3a labels with a red asterisk,
+   white 3px inputs with a #959494 border, and a black 3px button in bold 20px, centered. */
+.book { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; font-family: 'Poppins', sans-serif; background: #ffffff; }
+.book .card { width: 100%; max-width: 480px; padding: 40px; text-align: center; background: rgb(245, 246, 242); border: 0; border-radius: 0; box-shadow: none; }
 .book img { width: 64px; height: 64px; border-radius: 14px; margin-bottom: 16px; }
-.book h1 { font-size: 22px; }
-.book p { margin: 8px 0 0; color: var(--muted); }
-.book .btn { margin-top: 20px; }
+.book h1 { font-family: 'Poppins', sans-serif; font-size: 24px; font-weight: 700; color: rgb(51, 71, 91); }
+.book p { margin: 8px 0 0; font-size: 16px; color: rgb(51, 71, 91); }
+/* loading and error screens: same panel, spinner in the button's black on the field border's gray */
+.book .spinner { width: 20px; height: 20px; border-color: #d9d9d9; border-top-color: #000000; vertical-align: -5px; }
+.book__form { margin-top: 28px; text-align: left; }
+.book__label { display: block; margin: 0 0 10px; font-size: 20px; color: #212d3a; }
+.book__req { color: #e51520; }
+.book__input {
+  display: block; width: 100%; margin: 0; padding: 12px;
+  font: 16px 'Poppins', sans-serif; color: #212d3a; background: #ffffff;
+  border: 1px solid #959494; border-radius: 3px; transition: box-shadow .2s ease;
+}
+.book__input::placeholder { color: rgba(81, 99, 131, .64); }
+.book__input:hover { box-shadow: 0 0 2px #959494; }
+.book__input:focus { outline: none; box-shadow: 0 0 3px #959494; }
+.book__input[aria-invalid="true"] { border-color: #e51520; }
+.book__err { margin-top: 10px; font-size: 16px; color: #e51520; }
+.book__btn {
+  display: block; margin: 40px auto 0; padding: 12px 24px;
+  font: 700 20px 'Poppins', sans-serif; color: #ffffff; background: #000000;
+  border: 0; border-radius: 3px; cursor: pointer; transition: transform .2s ease-out;
+}
+.book__btn:hover { transform: translateY(-1px); }
+.book__btn:active { transform: translateY(1px); }
+.book__btn:focus-visible { outline: 2px solid #000000; outline-offset: 3px; }
+@media (max-width: 430px) {
+  .book .card { padding: 32px 20px; }
+  .book__btn { width: 100%; }
+}
 
 /* ── Flatpickr calendar (dates) ──
    Ported from Fairbank order placement (its base rules plus its light-theme
@@ -297,6 +375,7 @@ code { padding: 1px 6px; font: 13px ui-monospace, Menlo, monospace; color: var(-
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230091ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='16.5' rx='2'/%3E%3Cpath d='M3 9.5h18M8 2.5v4M16 2.5v4'/%3E%3C/svg%3E");
 }
 .datebar .date-alt { width: 170px; }
+.datebar .date-alt.date-range { width: 250px; }
 
 /* No padding or border on the outer box: when flatpickr opens the calendar
    above the field it positions it by the summed height of its children
@@ -360,10 +439,11 @@ span.flatpickr-weekday { color: var(--muted); font-weight: 600; font-size: 12px;
 
 /* ── Phones ── */
 @media (max-width: 960px) {
-  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kpis, .kpis--lead { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .kpi:nth-child(3n) { border-right: 0; }
   .kpi:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
   .away__grid { grid-template-columns: 1fr 1fr; }
+  .steps { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 767px) {
   .hdr { padding: 0 12px; gap: 10px; font-size: 13px; }
@@ -372,9 +452,33 @@ span.flatpickr-weekday { color: var(--muted); font-weight: 600; font-size: 12px;
   .hdr__end { gap: 12px; }
   .page { padding: 16px 12px 48px; }
   h1 { font-size: 22px; }
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis, .kpis--lead { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpi { border-right: 0 !important; border-bottom: 1px solid var(--border); }
   .kpi:nth-child(odd) { border-right: 1px solid var(--border) !important; }
   .away__grid { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: 1fr; }
   .input, select.input { font-size: 16px; } /* no iOS zoom on focus */
+  .datebar .date-alt.date-range { width: 290px; } /* 16px text on phones */
+
+  /* Rotation as one stacked card per rep: name and switch, then the link, then the buttons. */
+  .rot, .rot tbody { display: block; }
+  .rot thead { display: none; }
+  .rot tr.rep {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+  }
+  .rot--ordering tr.rep { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .rot tr.rep td, .rot tbody tr:nth-child(even) td { padding: 0; border: 0; background: none; }
+  .rot .c-name { grid-row: 1; grid-column: 1; }
+  .rot .c-on { grid-row: 1; grid-column: 2; align-self: start; }
+  .rot--ordering .c-order { grid-row: 1; grid-column: 1; width: auto; }
+  .rot--ordering .c-name { grid-column: 2; }
+  .rot--ordering .c-on { grid-column: 3; }
+  .rot .c-link, .rot .c-acts { grid-column: 1 / -1; }
+  .rot .c-acts { width: auto; text-align: left; white-space: normal; }
+  .rot .c-acts .btn { margin-bottom: 4px; }
+  .rot .c-link { width: auto; }
+  .rot tr.away { display: block; border-bottom: 1px solid var(--border); }
+  .rot tr.away td { display: block; padding: 14px 16px; border: 0; }
+  .rot tr.away td:empty { display: none; }
 }

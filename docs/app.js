@@ -206,11 +206,15 @@
   // Date picker: Flatpickr set up like Fairbank's order placement (vendor/flatpickr 4.6.13). The real input keeps
   // YYYY-MM-DD (or YYYY-MM-DD HH:MM with time); people see "Oct 26, 2026" in a box with a calendar icon. Read the
   // chosen moment from fp.selectedDates[0], not the input text (Safari can't parse "2026-11-02 14:00").
+  // range: true picks a from / to pair (the report); the box shows "Oct 1, 2026 to Oct 30, 2026" and onChange /
+  // onClose get all of fp.selectedDates through fp.
   function datePicker(el, opts) {
     if (!window.flatpickr) return null;
     opts = opts || {};
     var time = !!opts.time;
     var fp = window.flatpickr(el, {
+      mode: opts.range ? 'range' : 'single',
+      locale: { rangeSeparator: ' to ' },
       dateFormat: time ? 'Y-m-d H:i' : 'Y-m-d',
       altInput: true,
       altFormat: time ? 'M j, Y h:i K' : 'M j, Y',
@@ -221,6 +225,7 @@
       minDate: opts.minDate || null,
       disableMobile: true, // keep the themed calendar on phones
       onChange: function (dates, str) { if (opts.onChange) opts.onChange(dates[0] || null, str, fp); },
+      onClose: function (dates, str) { if (opts.onClose) opts.onClose(dates[0] || null, str, fp); },
     });
     if (fp.altInput) {
       if (opts.label) fp.altInput.setAttribute('aria-label', opts.label);
@@ -229,9 +234,11 @@
     return fp;
   }
 
-  // The universal booking link (book/ next to the other pages).
+  // The universal booking link people share: nibly.ca/meet, which the user set up to redirect to book/ (2026-10-30).
+  // Shown on Settings whatever host the pages run on.
+  var BOOK_URL = 'https://nibly.ca/meet';
   function bookUrl() {
-    return new URL(BASE + 'book/', location.href).href;
+    return BOOK_URL;
   }
 
   var toastTimer = null;
