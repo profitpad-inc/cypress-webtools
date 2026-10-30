@@ -1,0 +1,474 @@
+{
+  "metadata": {
+    "version": 2
+  },
+  "zaps": [
+    {
+      "id": 1,
+      "title": "HS Round Robin",
+      "nodes": {
+        "1": {
+          "id": 1,
+          "paused": false,
+          "type_of": "read",
+          "params": {
+            "list_id": "276"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {
+              "list_id": "[Zap Trigger] Contact Owner Round Robin"
+            }
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": null,
+          "root_id": null,
+          "action": "new_contact_in_list_resthook_v3",
+          "selected_api": "HubSpotCLIAPI@1.17.0",
+          "title": "HS Round Robin",
+          "authentication_id": "faa43247231eec3ae1b4ac63bf09db05be1acefeb5543beee3324f437f1863ae"
+        },
+        "2": {
+          "id": 2,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "table_id": "01KRZ14CMCM7R3GK6WMFJQ4Q8D",
+            "record_id": "01KRZ2JYSGY4Z7VBN72KHJXGE5",
+            "field_data_key": "data__f3",
+            "increment_amount": "1"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {
+              "table_id": "[Table] Round Robin",
+              "record_id": "counter"
+            },
+            "stepTitle": "increment counter"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 1,
+          "root_id": 1,
+          "action": "increment_value",
+          "selected_api": "TableCLIAPI@1.26.0",
+          "title": null,
+          "authentication_id": null
+        },
+        "3": {
+          "id": 3,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "transform": "number.spreadsheet_formula",
+            "inputs": "MOD( {{=gives[\"364808211\"][\"new\"][\"data\"][\"f3\"]}},4)"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {
+              "transform": "Spreadsheet-Style Formula"
+            },
+            "stepTitle": "counter mod 4"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 2,
+          "root_id": 1,
+          "action": "number_line_item",
+          "selected_api": "ZapierFormatterCLIAPI@1.0.8",
+          "title": null,
+          "authentication_id": null
+        },
+        "4": {
+          "id": 4,
+          "paused": true,
+          "type_of": "search",
+          "params": {
+            "_zap_search_success_on_miss": false,
+            "_zap_search_multiple_results": "first",
+            "table_id": "01KRZ14CMCM7R3GK6WMFJQ4Q8D",
+            "filter_count": "1",
+            "use_stored_order": false,
+            "field_data_key": "data__f3",
+            "operator": "exact",
+            "lookup_value": "{{=gives[\"364807838\"][\"output\"]}}"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {
+              "table_id": "[Table] Round Robin",
+              "field_data_key": "index"
+            }
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 3,
+          "root_id": 1,
+          "action": "find_record",
+          "selected_api": "TableCLIAPI@1.26.0",
+          "title": null,
+          "authentication_id": null
+        },
+        "5": {
+          "id": 5,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "id": "{{=gives[\"364805788\"][\"hs_object_id\"]}}",
+            "hubspot_owner_id": "{{=gives['364807741'][\"old\"][\"data\"][\"f2\"]}}",
+            "data__recent_zap_link": "HS Round Robin\nhttps://zapier.com/editor/364805788/published"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {}
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 4,
+          "root_id": 1,
+          "action": "update_crm_contact",
+          "selected_api": "HubSpotCLIAPI@1.17.0",
+          "title": null,
+          "authentication_id": "faa43247231eec3ae1b4ac63bf09db05be1acefeb5543beee3324f437f1863ae"
+        },
+        "6": {
+          "id": 6,
+          "paused": true,
+          "type_of": "write",
+          "params": {},
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            }
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 5,
+          "root_id": 1,
+          "action": "branch",
+          "selected_api": "BranchingAPI",
+          "title": null,
+          "authentication_id": null
+        },
+        "7": {
+          "id": 7,
+          "paused": true,
+          "type_of": "filter",
+          "params": {
+            "color": "Heroine Blue",
+            "emoji": "A",
+            "path_eval_index": 0,
+            "filter_criteria": [
+              {
+                "id": 7739909287832440,
+                "group": 2325570143541477,
+                "key": "{{=gives[\"364805788\"][\"id\"]}}",
+                "value": "",
+                "match": "iexist",
+                "action": "stop"
+              }
+            ]
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "stepTitle": "never run"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 6,
+          "root_id": 1,
+          "action": "filter",
+          "selected_api": "BranchingAPI",
+          "title": "never run",
+          "authentication_id": null
+        },
+        "8": {
+          "id": 8,
+          "paused": true,
+          "type_of": "filter",
+          "params": {
+            "color": "Peru",
+            "emoji": "B",
+            "path_eval_stage": 1,
+            "filter_criteria": [
+              {
+                "id": 4394556959256015,
+                "group": 8424278985126298,
+                "key": "",
+                "value": "",
+                "action": "continue"
+              }
+            ],
+            "isAlwaysRun": true,
+            "formerTitle": null,
+            "path_eval_index": 1
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "stepTitle": "always"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 6,
+          "root_id": 1,
+          "action": "filter",
+          "selected_api": "BranchingAPI",
+          "title": "always",
+          "authentication_id": null
+        },
+        "9": {
+          "id": 9,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "timezone": false,
+            "spreadsheet": "1puO3uiqdjXkxWc-ZSl_JL3cXo2zI7DWpiDcHpcGlXIw",
+            "worksheet": "1311016881",
+            "COL$A": "{{=meta[\"utc_iso\"]}}",
+            "COL$B": "{{=gives[\"364805788\"][\"id\"]}}",
+            "COL$C": "{{=gives[\"364807741\"][\"old\"][\"data\"][\"f2\"]}}",
+            "COL$D": "{{=gives[\"364807741\"][\"old\"][\"data\"][\"f1\"]}}",
+            "COL$E": "{{=gives[\"364805788\"][\"email\"]}}",
+            "COL$F": "https://app.hubspot.com/contacts/22691627/record/0-1/{{=gives[\"364805788\"][\"id\"]}}"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {
+              "spreadsheet": "cypress - audits",
+              "worksheet": "round robin assignments"
+            }
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 8,
+          "root_id": 1,
+          "action": "add_row",
+          "selected_api": "GoogleSheetsV2CLIAPI@2.17.3",
+          "title": null,
+          "authentication_id": "d248e8e569e59898e130e69470678607f16335297bb4252d10e43b4b52f86939"
+        },
+        "10": {
+          "id": 10,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "fail_on_errors": false,
+            "method": "POST",
+            "url": "https://www.googleapis.com/batch/calendar/v3",
+            "querystring": {
+              "": ""
+            },
+            "body": "--batch_boundary\nContent-Type: application/http\nContent-ID: <1>\n\nGET /calendar/v3/calendars/patn%40cypressvending.ca/events?q={{=gives[\"364805788\"][\"email\"]}}&singleEvents=true HTTP/1.1\n\n--batch_boundary--\nContent-Type: application/http\nContent-ID: <2>\n\nGET /calendar/v3/calendars/grahamp%40cypressvending.ca/events?q={{=gives[\"364805788\"][\"email\"]}}&singleEvents=true HTTP/1.1\n\n--batch_boundary\nContent-Type: application/http\nContent-ID: <3>\n\nGET /calendar/v3/calendars/mackenziem%40cypressvending.ca/events?q={{=gives[\"364805788\"][\"email\"]}}&singleEvents=true HTTP/1.1\n\n--batch_boundary\nContent-Type: application/http\nContent-ID: <4>\n\nGET /calendar/v3/calendars/jeffb%40cypressvending.ca/events?q={{=gives[\"364805788\"][\"email\"]}}&singleEvents=true HTTP/1.1\n\n--batch_boundary\nContent-Type: application/http\nContent-ID: <5>\n\nGET /calendar/v3/calendars/matta%40cypressvending.ca/events?q={{=gives[\"364805788\"][\"email\"]}}&singleEvents=true HTTP/1.1\n\n--batch_boundary--",
+            "headers": {
+              "Content-Type": "multipart/mixed; boundary=batch_boundary"
+            }
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {},
+            "stepTitle": "get calendar events"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 7,
+          "root_id": 1,
+          "action": "_zap_raw_request",
+          "selected_api": "GoogleCalendarCLIAPI@1.16.0",
+          "title": "get calendar events",
+          "authentication_id": "d7facf392def265bd4e5407f22219bec35c14d319290dcfdd8ff02f89438c623"
+        },
+        "11": {
+          "id": 11,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "transform": "string.re_extract",
+            "findall": false,
+            "multiline": false,
+            "dotall": false,
+            "ignorecase": false,
+            "inputs": "{{=gives['366161649'][\"response\"][\"body\"]}}",
+            "pattern": "\"organizer\":\\s*\\{\\s*\"email\":\\s*\"([^\"]+)\""
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false
+            },
+            "parammap": {
+              "transform": "Extract Pattern"
+            },
+            "stepTitle": "find owner"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 10,
+          "root_id": 1,
+          "action": "text_line_item",
+          "selected_api": "ZapierFormatterCLIAPI@1.0.8",
+          "title": "find owner",
+          "authentication_id": null
+        },
+        "12": {
+          "id": 12,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "transform": "util.lookup",
+            "inputs": "{{=gives['366161650'][\"output\"][\"0\"]}}",
+            "table": {
+              "grahamp@cypressvending.ca": "481206057",
+              "mackenziem@cypressvending.ca": "78033913",
+              "matta@cypressvending.ca": "742548153",
+              "jeffb@cypressvending.ca": "78305435"
+            },
+            "fallback": "481206057"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": true
+            },
+            "parammap": {
+              "transform": "Lookup Table"
+            },
+            "stepTitle": "owner id lookup"
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 11,
+          "root_id": 1,
+          "action": "util_line_item",
+          "selected_api": "ZapierFormatterCLIAPI@1.0.8",
+          "title": "owner id lookup",
+          "authentication_id": null
+        },
+        "13": {
+          "id": 13,
+          "paused": true,
+          "type_of": "write",
+          "params": {
+            "id": "{{=gives[\"364805788\"][\"hs_object_id\"]}}",
+            "hubspot_owner_id": "{{=gives['366161654'][\"output\"]}}",
+            "data__recent_zap_link": "HS Round Robin\nhttps://zapier.com/editor/364805788/published"
+          },
+          "meta": {
+            "$editor": {
+              "has_automatic_issues": false,
+              "missing_field_mapping": [
+                {
+                  "stepId": "364805788",
+                  "giveKey": "hs_object_id",
+                  "stepTitle": "New Contact in List in HubSpot",
+                  "stepNumber": 1,
+                  "app": "HubSpotCLIAPI@1.14.0",
+                  "hadMappingAtCopyTime": true
+                },
+                {
+                  "stepId": "364807741",
+                  "giveKey": "old__data__f2",
+                  "stepTitle": "Find Records in Zapier Tables",
+                  "stepNumber": 7,
+                  "app": "TableCLIAPI@1.21.0",
+                  "hadMappingAtCopyTime": true
+                }
+              ],
+              "replaced_step_id": "_GEN_1779911016130"
+            },
+            "parammap": {}
+          },
+          "triple_stores": {
+            "copied_from": null,
+            "created_by": null,
+            "polling_interval_override": 0,
+            "block_and_release_limit_override": 0,
+            "spread_tasks": 1
+          },
+          "parent_id": 12,
+          "root_id": 1,
+          "action": "update_crm_contact",
+          "selected_api": "HubSpotCLIAPI@1.17.0",
+          "title": null,
+          "authentication_id": "faa43247231eec3ae1b4ac63bf09db05be1acefeb5543beee3324f437f1863ae"
+        }
+      }
+    }
+  ]
+}

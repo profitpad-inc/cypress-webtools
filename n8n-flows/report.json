@@ -1,0 +1,188 @@
+{
+  "id": "pr9qZ5ozedhSTkxn",
+  "name": "cypress-webtools: report",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Webtool: assignments and owner overwrites for a date range (?from=&to=&tz=)."
+  },
+  "nodes": [
+    {
+      "id": "aee2c631-e355-5c71-b333-bf06125b4372",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "path": "cypress-webtools/report",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "b3afcbc1-2d0e-594a-b1bc-c44e8a978652"
+    },
+    {
+      "id": "7e74d04a-af26-5c96-8eac-0c5d20b38820",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// report: checks ?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=Area/City and passes them on base64-encoded.\nconst fail = (statusCode, error) => ({ ok: false, statusCode, body: { error } });\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\nconst isDay = (v) => /^\\d{4}-\\d{2}-\\d{2}$/.test(v) && Number.isFinite(Date.parse(v + 'T00:00:00Z'));\n\nfunction validate(query) {\n  const q = query || {};\n  const from = String(q.from || '');\n  const to = String(q.to || from);\n  let tz = String(q.tz || 'America/Toronto');\n  if (!isDay(from) || !isDay(to)) return fail(400, 'Pick a valid date.');\n  if (to < from) return fail(400, 'The end date is before the start date.');\n  if ((Date.parse(to) - Date.parse(from)) / 86400000 > 92) return fail(400, 'Pick a range of 3 months or less.');\n  try {\n    new Intl.DateTimeFormat('en-US', { timeZone: tz });\n  } catch (e) {\n    tz = 'America/Toronto';\n  }\n  return { ok: true, payload: { from, to, tz } };\n}\n\nconst result = validate($input.first().json.query);\nif (!result.ok) return result;\nreturn { \"ok\": true, \"p\": encode(result.payload) };\n"
+      }
+    },
+    {
+      "id": "1dc3aed0-0d70-5c5a-a892-b2fe871c84b6",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "d3a818bd-9f3b-5454-9cd6-0ec6ce8b9721",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "35b83c00-2db0-58a7-9e4f-eb9b238db36c",
+      "name": "Report",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nb AS (\n  SELECT ((j->>'from')::date)::timestamp AT TIME ZONE (j->>'tz') AS t0,\n    (((j->>'to')::date + 1)::timestamp) AT TIME ZONE (j->>'tz') AS t1\n  FROM p\n)\nSELECT json_build_object(\n  'assignments', COALESCE((\n    SELECT json_agg(x ORDER BY x.created_at DESC) FROM (\n      SELECT a.*, COALESCE((\n        SELECT json_agg(o ORDER BY o.changed_at) FROM cypress_rr_overwrites o WHERE o.assignment_id = a.id\n      ), '[]'::json) AS overwrites\n      FROM cypress_rr_assignments a, b\n      WHERE a.created_at >= b.t0 AND a.created_at < b.t1\n    ) x\n  ), '[]'::json),\n  'overwrites', COALESCE((\n    SELECT json_agg(y ORDER BY y.changed_at DESC) FROM (\n      SELECT o.*, a.contact_name, a.contact_email, a.owner_id AS assigned_owner_id, a.rep_name AS assigned_rep_name,\n        a.created_at AS assigned_at\n      FROM cypress_rr_overwrites o JOIN cypress_rr_assignments a ON a.id = o.assignment_id, b\n      WHERE o.changed_at >= b.t0 AND o.changed_at < b.t1\n    ) y\n  ), '[]'::json),\n  'reps', COALESCE((SELECT json_agg(r ORDER BY r.position, r.id) FROM cypress_rr_reps r), '[]'::json),\n  'settings', (SELECT row_to_json(s) FROM cypress_rr_settings s WHERE s.id = 1)\n) AS body;\n",
+        "options": {
+          "queryReplacement": "={{ $json.p }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "119cbbd8-3da5-59a3-a428-b4a4261715e1",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body || { error: 'Database error: ' + String($json.error?.message || $json.error || 'no result') }) }}",
+        "options": {
+          "responseCode": "={{ $json.body ? 200 : 500 }}"
+        }
+      }
+    },
+    {
+      "id": "63bcc80c-6ccf-591a-af79-53b9308db05c",
+      "name": "Respond: invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond: invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "id": "1E3bp2djD6QQhonZ",
+  "name": "cypress-webtools: owners",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Webtool: Cypress's HubSpot owners, for adding reps and naming owners in the report."
+  },
+  "nodes": [
+    {
+      "id": "99201474-0af0-5079-8478-790700c8144d",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "path": "cypress-webtools/owners",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "4442f42a-538f-549b-a2e0-08049acf235a"
+    },
+    {
+      "id": "2faa91e3-5719-596b-8ecc-c254be074e41",
+      "name": "HubSpot: owners",
+      "type": "CUSTOM.hubspotApi",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "resource": "owners",
+        "objectType": "owners",
+        "operation": "list",
+        "returnAll": true,
+        "returnAllMode": "allInOne",
+        "maxPages": 20
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "zeoRTe2WDma5tuVC",
+          "name": "cypress hubspot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "d1e661e1-d506-5473-8e2f-ae23e5e55db0",
+      "name": "Shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// owners: HubSpot owners for the \"add rep\" search and for showing names in the report.\nconst items = $input.all().map((item) => item.json);\nconst failed = items.find((j) => j.error);\nif (failed) {\n  return { \"statusCode\": 502, \"body\": { \"error\": 'HubSpot owners could not be read: ' + String(failed.error?.message || failed.error).slice(0, 200) } };\n}\nconst list = items.flatMap((j) => (Array.isArray(j.results) ? j.results : [j]));\nconst owners = list\n  .filter((o) => o && o.id && !o.archived)\n  .map((o) => ({\n    id: String(o.id),\n    userId: o.userId ? String(o.userId) : '',\n    name: [o.firstName, o.lastName].filter(Boolean).join(' ') || o.email || String(o.id),\n    email: o.email || '',\n  }))\n  .sort((a, b) => a.name.localeCompare(b.name));\nreturn { \"statusCode\": 200, \"body\": { \"owners\": owners } };\n"
+      }
+    },
+    {
+      "id": "a34e6f61-b63e-570c-872b-e79b4a10779f",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 200 }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: owners",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: owners": {
+      "main": [
+        [
+          {
+            "node": "Shape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

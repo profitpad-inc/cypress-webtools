@@ -1,0 +1,255 @@
+{
+  "id": "B1iPRK3B9hhbCnqv",
+  "name": "cypress-webtools: rr-watch-overwrites",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Round robin: every 5 minutes, reads the owner history of contacts assigned in the last 30 days and records each later owner change (who, when, through what). Changes nothing in HubSpot."
+  },
+  "nodes": [
+    {
+      "id": "7fd0cda2-b2ed-5c44-8f65-c7ee40e5288b",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "290a397f-4be5-5448-a88f-0031d08cc22a",
+      "name": "Recent assignments",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object('rows', COALESCE(json_agg(x), '[]'::json), 'ids', COALESCE(string_agg(x.contact_id, ','), '')) AS body\nFROM (\n  SELECT DISTINCT ON (a.contact_id) a.id, a.contact_id, a.owner_id, a.created_at\n  FROM cypress_rr_assignments a\n  WHERE a.created_at > now() - interval '30 days' AND a.status IN ('assigned', 'kept_existing') AND a.owner_id IS NOT NULL\n  ORDER BY a.contact_id, a.created_at DESC\n) x;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      }
+    },
+    {
+      "id": "cf8ad89a-3bd0-5996-8948-e9697cb8f71a",
+      "name": "Any?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "7072309c-f963-5c8f-9e8c-6f94147a6e8d",
+              "leftValue": "={{ !!$json.body.ids }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "19110316-0de4-5068-8823-a67790ea0f5a",
+      "name": "HubSpot: owner history",
+      "type": "CUSTOM.hubspotApi",
+      "typeVersion": 1,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "resource": "objects",
+        "objectType": "0-1",
+        "operation": "batchRead",
+        "batchReadInputMode": "ui",
+        "batchReadObjectIds": "={{ $json.body.ids }}",
+        "batchReadReturnAllMode": "allInOne",
+        "batchReadOptions": {
+          "properties": [
+            "hubspot_owner_id"
+          ],
+          "propertiesWithHistory": [
+            "hubspot_owner_id"
+          ]
+        }
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "zeoRTe2WDma5tuVC",
+          "name": "cypress hubspot"
+        }
+      }
+    },
+    {
+      "id": "699dc7f8-6f59-5b91-bc0b-50753bcbf031",
+      "name": "Find overwrites",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// rr-watch-overwrites: every owner change made after the tool's decision, from the contact's owner history.\n// The new owner is kept; this only records who changed it, when, and through what (Calendly, a user, a workflow).\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\nfunction findOverwrites(assignments, contacts) {\n  const byId = new Map(contacts.map((c) => [String(c.id), c]));\n  const rows = [];\n  for (const a of assignments) {\n    const c = byId.get(String(a.contact_id));\n    const history = (c?.propertiesWithHistory?.hubspot_owner_id || [])\n      .map((h) => ({ ...h, t: Date.parse(h.timestamp) }))\n      .filter((h) => Number.isFinite(h.t) && h.t > Date.parse(a.created_at))\n      .sort((x, y) => x.t - y.t);\n    let prev = a.owner_id ? String(a.owner_id) : '';\n    for (const h of history) {\n      const value = h.value ? String(h.value) : '';\n      if (value === prev) continue;\n      rows.push({\n        assignment_id: a.id,\n        contact_id: String(a.contact_id),\n        from_owner_id: prev || null,\n        to_owner_id: value || null,\n        source_type: h.sourceType || '',\n        source_id: h.sourceId || '',\n        source_label: h.sourceLabel || '',\n        changed_by_user_id: h.updatedByUserId ? String(h.updatedByUserId) : null,\n        changed_at: new Date(h.t).toISOString(),\n      });\n      prev = value;\n    }\n  }\n  return rows;\n}\n\nconst assignments = $('Recent assignments').first().json.body.rows || [];\nconst contacts = $input.first().json.results || [];\nconst rows = findOverwrites(assignments, contacts);\nreturn {\n  \"count\": rows.length,\n  \"p\": encode({ rows }),\n};\n"
+      }
+    },
+    {
+      "id": "874756b2-3fc0-57a8-8514-d6651adc5e03",
+      "name": "Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c4a4049b-2fa4-56b2-bf21-e684a6b8a4e2",
+              "leftValue": "={{ $json.count > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "464e70c7-bd5a-506e-8d0c-61cdd7ca09d8",
+      "name": "Save",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nins AS (\n  INSERT INTO cypress_rr_overwrites (assignment_id, contact_id, from_owner_id, to_owner_id, source_type, source_id,\n    source_label, changed_by_user_id, changed_at)\n  SELECT (x->>'assignment_id')::bigint, x->>'contact_id', x->>'from_owner_id', x->>'to_owner_id',\n    COALESCE(x->>'source_type', ''), COALESCE(x->>'source_id', ''), COALESCE(x->>'source_label', ''),\n    x->>'changed_by_user_id', (x->>'changed_at')::timestamptz\n  FROM p, jsonb_array_elements(p.j->'rows') x\n  ON CONFLICT (assignment_id, changed_at) DO NOTHING\n  RETURNING id\n)\nSELECT count(*) AS inserted FROM ins;\n",
+        "options": {
+          "queryReplacement": "={{ $json.p }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Recent assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recent assignments": {
+      "main": [
+        [
+          {
+            "node": "Any?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any?": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: owner history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: owner history": {
+      "main": [
+        [
+          {
+            "node": "Find overwrites",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find overwrites": {
+      "main": [
+        [
+          {
+            "node": "Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Found?": {
+      "main": [
+        [
+          {
+            "node": "Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Round Robin Settings</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="brand"><span class="brand-mark">C</span>Cypress <small>Lead Assignment</small></div>
+    <div class="tabs">
+      <a href="index.html">Report</a>
+      <a href="settings.html" class="active">Settings</a>
+    </div>
+  </nav>
+
+  <main class="page">
+    <div class="page-head">
+      <div>
+        <h1>Round robin settings</h1>
+        <p>Who is in the rotation, who is out of office, and whether leads are assigned automatically.</p>
+      </div>
+      <div class="faint" id="sync"></div>
+    </div>
+
+    <div id="load-error"></div>
+
+    <section class="card" id="assignment-card">
+      <div class="card-head">
+        <div>
+          <h2>Automatic assignment</h2>
+          <p>New contacts in the HubSpot round robin list get an owner within a couple of minutes.</p>
+        </div>
+        <span id="run-state"></span>
+      </div>
+      <div class="card-body" id="assignment"><div class="loading"><span class="spinner"></span></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Rotation</h2>
+          <p>Leads go to each rep in this order. Reps who are off or out of office are skipped.</p>
+        </div>
+        <div id="next-up"></div>
+      </div>
+      <div class="table-wrap" id="reps"><div class="loading"><span class="spinner"></span></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Add a rep</h2>
+          <p>Search Cypress's HubSpot users. New reps join the end of the rotation.</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row" style="align-items:flex-start">
+          <div class="grow" style="min-width:260px">
+            <label class="field">HubSpot user
+              <input type="search" id="owner-search" placeholder="Search by name or email" autocomplete="off">
+            </label>
+            <div class="owner-results" id="owner-results" hidden></div>
+          </div>
+          <div class="grow" style="min-width:260px">
+            <label class="field">Meeting link <span class="faint">optional</span>
+              <input type="url" id="add-link" placeholder="https://calendly.com/...">
+            </label>
+          </div>
+          <div style="padding-top:25px">
+            <button class="btn" id="add-btn" disabled>Add to rotation</button>
+          </div>
+        </div>
+        <div class="faint" id="owner-note" style="margin-top:8px"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    (function () {
+      var esc = CW.esc;
+      var state = { reps: [], settings: null, owners: null, picked: null, openAway: null };
+
+      function apply(data) {
+        state.reps = data.reps || [];
+        state.settings = data.settings || {};
+        render();
+      }
+
+      function load() {
+        CW.api('GET', 'state').then(apply).catch(function (e) {
+          document.getElementById('load-error').innerHTML = '<div class="alert error"><div class="grow"><strong>Could not load the settings.</strong> ' + esc(e.message) + '</div></div>';
+        });
+        CW.owners().then(function (list) { state.owners = list; renderOwnerResults(); }).catch(function (e) {
+          document.getElementById('owner-note').textContent = 'HubSpot users could not be loaded: ' + e.message;
+        });
+      }
+
+      function save(path, body, okMsg) {
+        return CW.api('POST', path, body).then(function (data) {
+          apply(data);
+          if (okMsg) CW.toast(okMsg);
+          return data;
+        }).catch(function (e) {
+          if (e.data && e.data.reps) apply(e.data);
+          CW.toast(e.message, true);
+          throw e;
+        });
+      }
+
+      function render() {
+        renderSync();
+        renderAssignment();
+        renderReps();
+        renderOwnerResults();
+      }
+
+      function renderSync() {
+        var s = state.settings;
+        document.getElementById('sync').textContent = !s.list_initialized
+          ? 'Round robin not switched on yet'
+          : 'Last checked HubSpot ' + CW.ago(s.last_poll_at);
+      }
+
+      // ── pause / resume ──────────────────────────────────────────────────
+      function renderAssignment() {
+        var s = state.settings;
+        var paused = CW.isPaused(s, Date.now());
+        document.getElementById('run-state').innerHTML = paused
+          ? '<span class="tag paused">Paused</span>'
+          : '<span class="tag on">Running</span>';
+        var html = '';
+        if (paused) {
+          html += '<div class="alert warn"><div class="grow"><strong>Paused' +
+            (s.paused_until ? ' until ' + esc(CW.fmtDateTime(s.paused_until)) : ' until resumed') + '.</strong>' +
+            (s.pause_reason ? ' ' + esc(s.pause_reason) + '.' : '') +
+            ' New leads are logged on the report but keep whatever owner they have.</div>' +
+            '<button class="btn" id="resume">Resume now</button></div>';
+        } else {
+          html += '<div class="row" style="align-items:flex-end">' +
+            '<label class="field" style="min-width:220px">Pause until <span class="faint">leave empty to pause until resumed</span>' +
+              '<input type="datetime-local" id="pause-until"></label>' +
+            '<label class="field grow" style="min-width:220px">Reason <span class="faint">shown on the report</span>' +
+              '<input type="text" id="pause-reason" maxlength="200" placeholder="e.g. Trade show, team offsite"></label>' +
+            '<button class="btn secondary" id="pause">Pause assignment</button></div>';
+        }
+        html += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-soft)">' +
+          '<label class="toggle"><input type="checkbox" id="skip-owned"' + (s.skip_if_owned ? ' checked' : '') + '><span class="track"></span>' +
+          '<span><strong style="font-weight:500">Leave contacts that already have an owner</strong><br>' +
+          '<span class="faint">When off, every new lead gets the next rep in the rotation, replacing any existing owner.</span></span></label></div>';
+        document.getElementById('assignment').innerHTML = html;
+
+        var resume = document.getElementById('resume');
+        if (resume) resume.onclick = function () {
+          resume.disabled = true;
+          save('settings', { paused: false, paused_until: '', pause_reason: '' }, 'Automatic assignment resumed').catch(function () { resume.disabled = false; });
+        };
+        var pause = document.getElementById('pause');
+        if (pause) pause.onclick = function () {
+          var until = document.getElementById('pause-until').value;
+          if (until && Date.parse(until) <= Date.now()) { CW.toast('Pick a time in the future.', true); return; }
+          pause.disabled = true;
+          save('settings', {
+            paused: true,
+            paused_until: until ? new Date(until).toISOString() : '',
+            pause_reason: document.getElementById('pause-reason').value,
+          }, 'Automatic assignment paused').catch(function () { pause.disabled = false; });
+        };
+        document.getElementById('skip-owned').onchange = function (e) {
+          save('settings', { skip_if_owned: e.target.checked }, e.target.checked ? 'Existing owners will be kept' : 'Existing owners will be replaced');
+        };
+      }
+
+      // ── rotation ────────────────────────────────────────────────────────
+      function repStatus(r, now) {
+        if (!r.enabled) return '<span class="tag off">Off</span>';
+        if (CW.isAway(r, now)) return '<span class="tag away">Out until ' + esc(CW.fmtDate(r.away_until, { month: 'short', day: 'numeric' })) + '</span>';
+        if (CW.awayLater(r, now)) return '<span class="tag on">In rotation</span><div class="faint">Out ' + esc(CW.fmtDate(r.away_from, { month: 'short', day: 'numeric' })) + ' to ' + esc(CW.fmtDate(r.away_until, { month: 'short', day: 'numeric' })) + '</div>';
+        return '<span class="tag on">In rotation</span>';
+      }
+
+      function dateInput(iso) {
+        return iso ? CW.dayString(new Date(iso)) : '';
+      }
+
+      function renderReps() {
+        var now = Date.now();
+        var reps = state.reps.slice().sort(function (a, b) { return a.position - b.position || a.id - b.id; });
+        var next = CW.nextUp(state.reps, state.settings);
+        document.getElementById('next-up').innerHTML = next
+          ? '<span class="muted">Next lead goes to</span> <strong>' + esc(next.name) + '</strong>'
+          : '<span class="tag unassigned">Nobody available</span>';
+        if (!reps.length) {
+          document.getElementById('reps').innerHTML = '<div class="empty"><strong>No reps yet</strong>Add a HubSpot user below.</div>';
+          return;
+        }
+        var rows = reps.map(function (r, i) {
+          var away = state.openAway === r.id;
+          var hasAway = r.away_until && Date.parse(r.away_until) > now;
+          return '<tr class="rep-row' + (r.enabled ? '' : ' off') + '" data-id="' + r.id + '">' +
+            '<td style="width:44px"><span class="order-btns">' +
+              '<button class="icon-btn" data-act="up" aria-label="Move up"' + (i === 0 ? ' disabled' : '') + '>&#9650;</button>' +
+              '<button class="icon-btn" data-act="down" aria-label="Move down"' + (i === reps.length - 1 ? ' disabled' : '') + '>&#9660;</button>' +
+            '</span></td>' +
+            '<td><span class="rep-name">' + esc(r.name || 'Owner ' + r.hs_owner_id) + '</span>' +
+              (next && next.id === r.id ? '<span class="next-badge">Next</span>' : '') +
+              '<div class="faint">' + esc(r.email) + '</div></td>' +
+            '<td>' + repStatus(r, now) + '</td>' +
+            '<td><input type="url" class="link-input" data-act="link" value="' + esc(r.meeting_link) + '" placeholder="Paste meeting link" aria-label="Meeting link for ' + esc(r.name) + '"></td>' +
+            '<td><label class="toggle" title="In the rotation"><input type="checkbox" data-act="enabled"' + (r.enabled ? ' checked' : '') + ' aria-label="' + esc(r.name) + ' in rotation"><span class="track"></span></label></td>' +
+            '<td class="nowrap" style="text-align:right">' +
+              '<button class="btn small tertiary" data-act="away">' + (hasAway ? 'Edit time off' : 'Time off') + '</button> ' +
+              '<button class="btn small link" data-act="remove">Remove</button></td>' +
+          '</tr>' +
+          (away ? '<tr class="away-form" data-id="' + r.id + '"><td></td><td colspan="5"><div class="grid">' +
+            '<label class="field">Out from<input type="date" data-f="from" value="' + esc(dateInput(r.away_from) || CW.dayString(new Date())) + '"></label>' +
+            '<label class="field">Back on<input type="date" data-f="until" value="' + esc(dateInput(r.away_until)) + '"></label>' +
+            '<label class="field">Reason <span class="faint">optional</span><input type="text" data-f="reason" maxlength="200" value="' + esc(r.away_reason) + '" placeholder="e.g. Vacation"></label>' +
+            '<div class="row"><button class="btn small" data-act="away-save">Save</button>' +
+              (hasAway ? '<button class="btn small secondary" data-act="away-clear">Back now</button>' : '') +
+              '<button class="btn small link" data-act="away-cancel">Cancel</button></div>' +
+          '</div><div class="faint" style="margin-top:6px">Leads skip this rep from the start of the first day until the start of the day they\'re back.</div></td></tr>' : '');
+        }).join('');
+        document.getElementById('reps').innerHTML = '<table><thead><tr><th></th><th>Rep</th><th>Status</th><th>Meeting link</th><th>On</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+      }
+
+      function repById(id) {
+        for (var i = 0; i < state.reps.length; i++) if (state.reps[i].id === id) return state.reps[i];
+        return null;
+      }
+
+      var repsEl = document.getElementById('reps');
+      repsEl.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-act]');
+        if (!btn || btn.tagName === 'INPUT') return;
+        var tr = btn.closest('tr');
+        var id = Number(tr.getAttribute('data-id'));
+        var r = repById(id);
+        var act = btn.getAttribute('data-act');
+        if (act === 'up' || act === 'down') {
+          var ids = state.reps.slice().sort(function (a, b) { return a.position - b.position || a.id - b.id; }).map(function (x) { return x.id; });
+          var i = ids.indexOf(id), j = act === 'up' ? i - 1 : i + 1;
+          if (j < 0 || j >= ids.length) return;
+          ids[i] = ids[j]; ids[j] = id;
+          save('rep', { action: 'order', order: ids });
+        } else if (act === 'remove') {
+          if (!confirm('Remove ' + r.name + ' from the round robin? Their past assignments stay on the report.')) return;
+          save('rep', { action: 'remove', id: id }, r.name + ' removed');
+        } else if (act === 'away') {
+          state.openAway = state.openAway === id ? null : id;
+          renderReps();
+        } else if (act === 'away-cancel') {
+          state.openAway = null;
+          renderReps();
+        } else if (act === 'away-clear') {
+          state.openAway = null;
+          save('rep', { action: 'update', id: id, away_from: '', away_until: '', away_reason: '' }, r.name + ' is back in the rotation');
+        } else if (act === 'away-save') {
+          var from = tr.querySelector('[data-f="from"]').value;
+          var until = tr.querySelector('[data-f="until"]').value;
+          if (!until) { CW.toast('Pick the day they\'re back.', true); return; }
+          if (from && until <= from) { CW.toast('The day they\'re back has to be after the first day out.', true); return; }
+          save('rep', {
+            action: 'update', id: id,
+            away_from: from ? CW.parseDay(from).toISOString() : '',
+            away_until: CW.parseDay(until).toISOString(),
+            away_reason: tr.querySelector('[data-f="reason"]').value,
+          }, 'Time off saved for ' + r.name).then(function () { state.openAway = null; renderReps(); });
+        }
+      });
+      repsEl.addEventListener('change', function (e) {
+        var el = e.target;
+        var act = el.getAttribute('data-act');
+        var tr = el.closest('tr');
+        if (!tr || !act) return;
+        var id = Number(tr.getAttribute('data-id'));
+        var r = repById(id);
+        if (act === 'enabled') {
+          save('rep', { action: 'update', id: id, enabled: el.checked }, r.name + (el.checked ? ' is in the rotation' : ' is out of the rotation'));
+        } else if (act === 'link') {
+          var v = el.value.trim();
+          if (v && !/^https?:\/\/\S+$/i.test(v)) { CW.toast('The meeting link must start with http:// or https://', true); return; }
+          if (v === (r.meeting_link || '')) return;
+          save('rep', { action: 'update', id: id, meeting_link: v }, 'Meeting link saved for ' + r.name);
+        }
+      });
+
+      // ── add a rep ──────────────────────────────────────────────────────
+      var search = document.getElementById('owner-search');
+      var results = document.getElementById('owner-results');
+      var addBtn = document.getElementById('add-btn');
+
+      function renderOwnerResults() {
+        if (!state.owners) return;
+        var q = search.value.trim().toLowerCase();
+        if (!q && !state.picked) { results.hidden = true; return; }
+        var inList = {};
+        state.reps.forEach(function (r) { inList[r.hs_owner_id] = true; });
+        var matches = state.owners.filter(function (o) {
+          return !q || o.name.toLowerCase().indexOf(q) >= 0 || o.email.toLowerCase().indexOf(q) >= 0;
+        }).slice(0, 30);
+        results.hidden = false;
+        results.innerHTML = matches.length ? matches.map(function (o) {
+          var picked = state.picked && state.picked.id === o.id;
+          return '<button type="button" data-owner="' + esc(o.id) + '"' + (inList[o.id] ? ' disabled' : '') + (picked ? ' class="picked"' : '') + '>' +
+            '<span>' + esc(o.name) + '<br><span class="faint">' + esc(o.email) + '</span></span>' +
+            '<span class="faint">' + (inList[o.id] ? 'In the list' : picked ? 'Selected' : '') + '</span></button>';
+        }).join('') : '<div class="empty" style="padding:16px">No HubSpot users match.</div>';
+      }
+
+      search.addEventListener('input', function () {
+        state.picked = null;
+        addBtn.disabled = true;
+        renderOwnerResults();
+      });
+      results.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-owner]');
+        if (!b || b.disabled) return;
+        var id = b.getAttribute('data-owner');
+        state.picked = state.owners.filter(function (o) { return o.id === id; })[0];
+        search.value = state.picked.name;
+        addBtn.disabled = false;
+        renderOwnerResults();
+      });
+      addBtn.addEventListener('click', function () {
+        var o = state.picked;
+        if (!o) return;
+        var link = document.getElementById('add-link').value.trim();
+        if (link && !/^https?:\/\/\S+$/i.test(link)) { CW.toast('The meeting link must start with http:// or https://', true); return; }
+        addBtn.disabled = true;
+        save('rep', { action: 'add', hs_owner_id: o.id, hs_user_id: o.userId, name: o.name, email: o.email, meeting_link: link }, o.name + ' added to the rotation')
+          .then(function () {
+            state.picked = null;
+            search.value = '';
+            document.getElementById('add-link').value = '';
+            results.hidden = true;
+          })
+          .catch(function () { addBtn.disabled = false; });
+      });
+
+      load();
+    })();
+  </script>
+</body>
+</html>

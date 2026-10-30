@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lead Assignment Report</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="brand"><span class="brand-mark">C</span>Cypress <small>Lead Assignment</small></div>
+    <div class="tabs">
+      <a href="index.html" class="active">Report</a>
+      <a href="settings.html">Settings</a>
+    </div>
+  </nav>
+
+  <main class="page">
+    <div class="page-head">
+      <div>
+        <h1>Lead assignment report</h1>
+        <p>Who got each new lead, why, and whether anyone changed the owner afterwards.</p>
+      </div>
+      <div class="date-bar">
+        <div class="seg" id="quick">
+          <button type="button" data-range="today">Today</button>
+          <button type="button" data-range="yesterday">Yesterday</button>
+          <button type="button" data-range="7">Last 7 days</button>
+          <button type="button" data-range="30">Last 30 days</button>
+        </div>
+        <button class="icon-btn" id="prev" title="Previous day" aria-label="Previous day">&#9664;</button>
+        <input type="date" id="day" aria-label="Day">
+        <button class="icon-btn" id="next" title="Next day" aria-label="Next day">&#9654;</button>
+      </div>
+    </div>
+
+    <div id="banners"></div>
+
+    <section class="card">
+      <div class="kpis" id="kpis"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2 id="leads-title">Leads</h2>
+          <p>Every contact that joined the round robin list in this period.</p>
+        </div>
+        <select id="filter" aria-label="Filter leads" style="width:auto">
+          <option value="">All results</option>
+          <option value="assigned">Assigned</option>
+          <option value="kept_existing">Kept existing owner</option>
+          <option value="unassigned">Not assigned</option>
+          <option value="overwritten">Owner changed later</option>
+        </select>
+      </div>
+      <div class="table-wrap" id="leads"><div class="loading"><span class="spinner"></span></div></div>
+    </section>
+
+    <div class="row" style="align-items:stretch">
+      <section class="card grow" style="min-width:300px">
+        <div class="card-head"><div><h2>By rep</h2><p>Leads assigned in this period.</p></div></div>
+        <div class="table-wrap" id="by-rep"></div>
+      </section>
+      <section class="card grow" style="min-width:300px;flex:1.6">
+        <div class="card-head"><div><h2>Owner changes</h2><p>Changes made after the tool assigned a lead, by when they happened.</p></div></div>
+        <div class="table-wrap" id="changes"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    (function () {
+      var esc = CW.esc;
+      var state = { from: '', to: '', data: null, namer: CW.ownerNamer([], []) };
+      var STATUS = {
+        assigned: ['assigned', 'Assigned'],
+        kept_existing: ['kept', 'Kept owner'],
+        paused: ['paused', 'Paused'],
+        no_reps: ['unassigned', 'No rep available'],
+        error: ['error', 'Error'],
+      };
+
+      function setRange(from, to) {
+        state.from = from;
+        state.to = to || from;
+        document.getElementById('day').value = state.to;
+        var today = CW.dayString(new Date());
+        var quick = state.from === state.to
+          ? (state.from === today ? 'today' : state.from === CW.addDays(today, -1) ? 'yesterday' : '')
+          : (state.to === today && state.from === CW.addDays(today, -6) ? '7' : state.to === today && state.from === CW.addDays(today, -29) ? '30' : '');
+        Array.prototype.forEach.call(document.querySelectorAll('#quick button'), function (b) {
+          b.classList.toggle('active', b.getAttribute('data-range') === quick);
+        });
+        try { history.replaceState(null, '', '?from=' + state.from + '&to=' + state.to); } catch (e) { /* file:// */ }
+        load();
+      }
+
+      function load() {
+        document.getElementById('leads').innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+        var q = 'report?from=' + state.from + '&to=' + state.to + '&tz=' + encodeURIComponent(CW.timeZone());
+        CW.api('GET', q).then(function (data) {
+          state.data = data;
+          state.namer = CW.ownerNamer([], data.reps);
+          render();
+          CW.owners().then(function (list) { state.namer = CW.ownerNamer(list, data.reps); render(); }).catch(function () { /* names fall back to ids */ });
+        }).catch(function (e) {
+          document.getElementById('leads').innerHTML = '<div class="empty"><strong>Could not load the report</strong>' + esc(e.message) + '</div>';
+        });
+      }
+
+      function isUnassigned(a) { return a.status === 'paused' || a.status === 'no_reps' || a.status === 'error'; }
+
+      function render() {
+        var d = state.data;
+        var rows = d.assignments || [];
+        var now = Date.now();
+        renderBanners(d, now);
+
+        var assigned = rows.filter(function (a) { return a.status === 'assigned'; }).length;
+        var kept = rows.filter(function (a) { return a.status === 'kept_existing'; }).length;
+        var unassigned = rows.filter(isUnassigned).length;
+        var overwritten = rows.filter(function (a) { return (a.overwrites || []).length; }).length;
+        var pct = function (n) { return rows.length ? Math.round(n * 100 / rows.length) + '% of leads' : ' '; };
+        document.getElementById('kpis').innerHTML = [
+          ['New leads', rows.length, state.from === state.to ? CW.fmtDate(CW.parseDay(state.from).toISOString(), { weekday: 'long', month: 'short', day: 'numeric' }) : CW.fmtDate(CW.parseDay(state.from).toISOString(), { month: 'short', day: 'numeric' }) + ' to ' + CW.fmtDate(CW.parseDay(state.to).toISOString(), { month: 'short', day: 'numeric' })],
+          ['Assigned', assigned, pct(assigned)],
+          ['Kept existing owner', kept, pct(kept)],
+          ['Not assigned', unassigned, unassigned ? 'paused, nobody available or errors' : ' '],
+          ['Owner changed later', overwritten, pct(overwritten)],
+        ].map(function (k) {
+          return '<div class="kpi"><div class="label">' + esc(k[0]) + '</div><div class="value">' + k[1] + '</div><div class="sub">' + esc(k[2]) + '</div></div>';
+        }).join('');
+
+        renderLeads(rows);
+        renderByRep(rows, d.reps || [], now);
+        renderChanges(d.overwrites || []);
+      }
+
+      function renderBanners(d, now) {
+        var s = d.settings || {};
+        var html = [];
+        if (CW.isPaused(s, now)) {
+          html.push('<div class="alert warn"><div class="grow"><strong>Automatic assignment is paused</strong>' +
+            (s.paused_until ? ' until ' + esc(CW.fmtDateTime(s.paused_until)) : ' until someone resumes it') +
+            (s.pause_reason ? ': ' + esc(s.pause_reason) : '') + '. New leads are logged but not assigned.</div>' +
+            '<a class="btn small secondary" href="settings.html">Manage</a></div>');
+        }
+        var away = (d.reps || []).filter(function (r) { return r.enabled && CW.isAway(r, now); });
+        if (away.length) {
+          html.push('<div class="alert info"><div class="grow"><strong>Out of the rotation right now:</strong> ' + away.map(function (r) {
+            return esc(r.name) + ' (back ' + esc(CW.fmtDate(r.away_until, { month: 'short', day: 'numeric' })) + (r.away_reason ? ', ' + esc(r.away_reason) : '') + ')';
+          }).join(', ') + '</div></div>');
+        }
+        if (!s.list_initialized) {
+          html.push('<div class="alert info"><div class="grow"><strong>Waiting for the first sync.</strong> Once the round robin is switched on, new leads from the HubSpot list show up here within a couple of minutes.</div></div>');
+        } else if (s.last_poll_error) {
+          html.push('<div class="alert error"><div class="grow"><strong>The last sync had a problem:</strong> ' + esc(s.last_poll_error) + '</div></div>');
+        } else if (s.last_poll_at && now - Date.parse(s.last_poll_at) > 15 * 60 * 1000) {
+          html.push('<div class="alert error"><div class="grow"><strong>No sync since ' + esc(CW.ago(s.last_poll_at)) + '.</strong> The round robin normally checks HubSpot every 2 minutes.</div></div>');
+        }
+        document.getElementById('banners').innerHTML = html.join('');
+      }
+
+      function renderLeads(rows) {
+        var f = document.getElementById('filter').value;
+        var list = rows.filter(function (a) {
+          if (!f) return true;
+          if (f === 'unassigned') return isUnassigned(a);
+          if (f === 'overwritten') return (a.overwrites || []).length > 0;
+          return a.status === f;
+        });
+        var multiDay = state.from !== state.to;
+        document.getElementById('leads-title').textContent = 'Leads (' + list.length + ')';
+        if (!list.length) {
+          document.getElementById('leads').innerHTML = '<div class="empty"><strong>No leads ' + (f ? 'match this filter' : 'in this period') + '</strong>' +
+            (f ? 'Try another filter.' : 'Leads appear here as they join the HubSpot list.') + '</div>';
+          return;
+        }
+        var n = state.namer;
+        document.getElementById('leads').innerHTML = '<table><thead><tr><th>Time</th><th>Contact</th><th>Result</th><th>Owner</th><th>Why</th></tr></thead><tbody>' +
+          list.map(function (a) {
+            var st = STATUS[a.status] || ['kept', a.status];
+            var ow = a.overwrites || [];
+            var owner = a.status === 'assigned' ? (a.rep_name || n.owner(a.owner_id)) : a.owner_id ? n.owner(a.owner_id) : '<span class="muted">Unassigned</span>';
+            var notes = ow.map(function (o) {
+              return '<div class="sub-note"><span class="tag overwritten">Changed</span><span>' + esc(CW.fmtDateTime(o.changed_at)) + ': ' +
+                esc(n.owner(o.from_owner_id)) + ' &rarr; <strong>' + esc(n.owner(o.to_owner_id)) + '</strong> by ' + esc(CW.sourceText(o, n)) + '</span></div>';
+            }).join('');
+            var skipped = (a.skipped || []).length && a.status !== 'assigned'
+              ? '<div class="faint">Skipped: ' + a.skipped.map(function (s) { return esc(s.name) + (s.away_until ? ' (back ' + esc(CW.fmtDate(s.away_until, { month: 'short', day: 'numeric' })) + ')' : ''); }).join(', ') + '</div>'
+              : '';
+            return '<tr>' +
+              '<td class="nowrap">' + (multiDay ? esc(CW.fmtDate(a.created_at, { month: 'short', day: 'numeric' })) + '<br>' : '') + esc(CW.fmtTime(a.created_at)) + '</td>' +
+              '<td><a class="contact-name" href="' + CW.contactUrl(a.contact_id) + '" target="_blank" rel="noopener">' + esc(a.contact_name || 'Contact ' + a.contact_id) + '</a>' +
+                '<div class="faint">' + esc(a.contact_email) + '</div></td>' +
+              '<td><span class="tag ' + st[0] + '">' + esc(st[1]) + '</span></td>' +
+              '<td class="nowrap">' + (a.status === 'assigned' ? esc(owner) : (a.owner_id ? esc(owner) : owner)) + '</td>' +
+              '<td>' + esc(a.reason) + skipped + notes + '</td>' +
+            '</tr>';
+          }).join('') + '</tbody></table>';
+      }
+
+      function renderByRep(rows, reps, now) {
+        var counts = {}, lost = {};
+        rows.forEach(function (a) {
+          if (a.status !== 'assigned') return;
+          counts[a.owner_id] = (counts[a.owner_id] || 0) + 1;
+          if ((a.overwrites || []).length) lost[a.owner_id] = (lost[a.owner_id] || 0) + 1;
+        });
+        var ids = reps.map(function (r) { return r.hs_owner_id; });
+        Object.keys(counts).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+        var byOwner = {};
+        reps.forEach(function (r) { byOwner[r.hs_owner_id] = r; });
+        var n = state.namer;
+        document.getElementById('by-rep').innerHTML = '<table><thead><tr><th>Rep</th><th>Status</th><th class="num">Assigned</th><th class="num">Changed later</th></tr></thead><tbody>' +
+          ids.map(function (id) {
+            var r = byOwner[id];
+            var status = !r ? '<span class="tag off">Removed</span>'
+              : !r.enabled ? '<span class="tag off">Off</span>'
+              : CW.isAway(r, now) ? '<span class="tag away">Out until ' + esc(CW.fmtDate(r.away_until, { month: 'short', day: 'numeric' })) + '</span>'
+              : '<span class="tag on">In rotation</span>';
+            return '<tr><td>' + esc(r ? r.name : n.owner(id)) + '</td><td>' + status + '</td><td class="num">' + (counts[id] || 0) + '</td><td class="num">' + (lost[id] || 0) + '</td></tr>';
+          }).join('') + '</tbody></table>';
+      }
+
+      function renderChanges(list) {
+        var n = state.namer;
+        if (!list.length) {
+          document.getElementById('changes').innerHTML = '<div class="empty"><strong>No owner changes</strong>Nobody changed the owner of an assigned lead in this period.</div>';
+          return;
+        }
+        document.getElementById('changes').innerHTML = '<table><thead><tr><th>When</th><th>Contact</th><th>Change</th><th>By</th></tr></thead><tbody>' +
+          list.map(function (o) {
+            return '<tr><td class="nowrap">' + esc(CW.fmtDateTime(o.changed_at)) + '</td>' +
+              '<td><a href="' + CW.contactUrl(o.contact_id) + '" target="_blank" rel="noopener">' + esc(o.contact_name || 'Contact ' + o.contact_id) + '</a>' +
+                '<div class="faint">assigned ' + esc(CW.fmtDateTime(o.assigned_at)) + '</div></td>' +
+              '<td>' + esc(n.owner(o.from_owner_id)) + ' &rarr; <strong>' + esc(n.owner(o.to_owner_id)) + '</strong></td>' +
+              '<td>' + esc(CW.sourceText(o, n)) + '</td></tr>';
+          }).join('') + '</tbody></table>';
+      }
+
+      document.getElementById('filter').addEventListener('change', function () { if (state.data) renderLeads(state.data.assignments || []); });
+      document.getElementById('day').addEventListener('change', function (e) { if (e.target.value) setRange(e.target.value); });
+      document.getElementById('prev').addEventListener('click', function () { setRange(CW.addDays(state.to, -1)); });
+      document.getElementById('next').addEventListener('click', function () { setRange(CW.addDays(state.to, 1)); });
+      document.getElementById('quick').addEventListener('click', function (e) {
+        var r = e.target.getAttribute('data-range');
+        if (!r) return;
+        var today = CW.dayString(new Date());
+        if (r === 'today') setRange(today);
+        else if (r === 'yesterday') setRange(CW.addDays(today, -1));
+        else setRange(CW.addDays(today, -(Number(r) - 1)), today);
+      });
+
+      var params = new URLSearchParams(location.search);
+      var valid = function (s) { return /^\d{4}-\d{2}-\d{2}$/.test(s || ''); };
+      var today = CW.dayString(new Date());
+      setRange(valid(params.get('from')) ? params.get('from') : today, valid(params.get('to')) ? params.get('to') : null);
+    })();
+  </script>
+</body>
+</html>

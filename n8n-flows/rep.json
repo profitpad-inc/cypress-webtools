@@ -1,0 +1,230 @@
+{
+  "id": "wbBQvvOlRLw4IULs",
+  "name": "cypress-webtools: rep",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Webtool: add, update (meeting link, on/off, out of office), remove or reorder reps."
+  },
+  "nodes": [
+    {
+      "id": "06658625-5869-5c54-9ab5-1b1c3c64868a",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cypress-webtools/rep",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "0252c83e-c7bc-53d7-a481-5ea909a5d172"
+    },
+    {
+      "id": "f0f0a78c-b1ff-55d7-b6aa-be121d04b7b7",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// rep: checks the POST body and passes it on base64-encoded (no commas, so the Postgres node keeps it one parameter).\nconst clean = (v, max = 200) => String(v ?? '').trim().slice(0, max);\nconst fail = (statusCode, error) => ({ ok: false, statusCode, body: { error } });\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\nconst isId = (v) => /^\\d{1,12}$/.test(String(v ?? ''));\nconst isLink = (v) => v === '' || /^https?:\\/\\/\\S+$/i.test(v);\nconst isoOrEmpty = (v) => {\n  if (v === '' || v === null) return '';\n  const t = Date.parse(v);\n  return Number.isFinite(t) ? new Date(t).toISOString() : null;\n};\n\nfunction validate(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const action = clean(b.action, 20);\n\n  if (action === 'add') {\n    if (!isId(b.hs_owner_id)) return fail(400, 'Pick a HubSpot owner to add.');\n    const meeting_link = clean(b.meeting_link, 500);\n    if (!isLink(meeting_link)) return fail(400, 'The meeting link must start with http:// or https://');\n    return { ok: true, payload: {\n      action,\n      hs_owner_id: String(b.hs_owner_id),\n      hs_user_id: isId(b.hs_user_id) ? String(b.hs_user_id) : null,\n      name: clean(b.name),\n      email: clean(b.email),\n      meeting_link,\n      enabled: b.enabled !== false,\n    } };\n  }\n\n  if (action === 'update') {\n    if (!isId(b.id)) return fail(400, 'Missing the rep id.');\n    const payload = { action, id: Number(b.id) };\n    if ('meeting_link' in b) {\n      payload.meeting_link = clean(b.meeting_link, 500);\n      if (!isLink(payload.meeting_link)) return fail(400, 'The meeting link must start with http:// or https://');\n    }\n    if ('enabled' in b) payload.enabled = b.enabled === true;\n    for (const key of ['away_from', 'away_until']) {\n      if (key in b) {\n        const v = isoOrEmpty(b[key]);\n        if (v === null) return fail(400, `That ${key === 'away_from' ? 'start' : 'return'} date isn't a valid date.`);\n        payload[key] = v;\n      }\n    }\n    if (payload.away_from && payload.away_until && payload.away_until <= payload.away_from) {\n      return fail(400, 'The return date has to be after the start date.');\n    }\n    if ('away_reason' in b) payload.away_reason = clean(b.away_reason);\n    return { ok: true, payload };\n  }\n\n  if (action === 'remove') {\n    if (!isId(b.id)) return fail(400, 'Missing the rep id.');\n    return { ok: true, payload: { action, id: Number(b.id) } };\n  }\n\n  if (action === 'order') {\n    const order = Array.isArray(b.order) ? b.order : [];\n    if (!order.length || !order.every(isId)) return fail(400, 'The new order is missing or invalid.');\n    return { ok: true, payload: { action, order: order.map(String) } };\n  }\n\n  return fail(400, 'Unknown action.');\n}\n\nconst result = validate($input.first().json.body);\nif (!result.ok) return result;\nreturn { \"ok\": true, \"action\": result.payload.action, \"p\": encode(result.payload) };\n"
+      }
+    },
+    {
+      "id": "912d5b32-e2e6-5bb0-b5fc-40f9cfae6fb1",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "b6da286c-d210-519a-ad17-a90570f97b26",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "853fdc56-3626-5c94-b465-6ee2679f3865",
+      "name": "Save",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nadded AS (\n  INSERT INTO cypress_rr_reps (hs_owner_id, hs_user_id, name, email, meeting_link, enabled, position)\n  SELECT j->>'hs_owner_id', j->>'hs_user_id', COALESCE(j->>'name', ''), COALESCE(j->>'email', ''),\n    COALESCE(j->>'meeting_link', ''), COALESCE((j->>'enabled')::boolean, true),\n    COALESCE((SELECT max(position) FROM cypress_rr_reps), 0) + 1\n  FROM p WHERE j->>'action' = 'add'\n  ON CONFLICT (hs_owner_id) DO NOTHING\n  RETURNING id\n),\nchanged AS (\n  UPDATE cypress_rr_reps r SET\n    meeting_link = CASE WHEN p.j ? 'meeting_link' THEN COALESCE(p.j->>'meeting_link', '') ELSE r.meeting_link END,\n    enabled = CASE WHEN p.j ? 'enabled' THEN (p.j->>'enabled')::boolean ELSE r.enabled END,\n    away_from = CASE WHEN p.j ? 'away_from' THEN NULLIF(p.j->>'away_from', '')::timestamptz ELSE r.away_from END,\n    away_until = CASE WHEN p.j ? 'away_until' THEN NULLIF(p.j->>'away_until', '')::timestamptz ELSE r.away_until END,\n    away_reason = CASE WHEN p.j ? 'away_reason' THEN COALESCE(p.j->>'away_reason', '') ELSE r.away_reason END,\n    updated_at = now()\n  FROM p WHERE p.j->>'action' = 'update' AND r.id = (p.j->>'id')::int\n  RETURNING r.id\n),\nremoved AS (\n  DELETE FROM cypress_rr_reps r USING p\n  WHERE p.j->>'action' = 'remove' AND r.id = (p.j->>'id')::int\n  RETURNING r.id\n),\nordered AS (\n  UPDATE cypress_rr_reps r SET position = o.ord, updated_at = now()\n  FROM p, jsonb_array_elements_text(CASE WHEN p.j->>'action' = 'order' THEN p.j->'order' ELSE '[]'::jsonb END) WITH ORDINALITY AS o(id, ord)\n  WHERE r.id = o.id::int\n  RETURNING r.id\n)\nSELECT\n  (SELECT count(*) FROM added) AS added,\n  (SELECT count(*) FROM changed) + (SELECT count(*) FROM removed) + (SELECT count(*) FROM ordered) AS changed;\n",
+        "options": {
+          "queryReplacement": "={{ $json.p }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "156e6485-c7bc-5a63-9698-ba95a9969820",
+      "name": "Load state",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'reps', COALESCE((SELECT json_agg(r ORDER BY r.position, r.id) FROM cypress_rr_reps r), '[]'::json),\n  'settings', (SELECT row_to_json(s) FROM cypress_rr_settings s WHERE s.id = 1),\n  'now', now()\n) AS body;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ba141775-d52c-53ba-a3cc-a7c1e0f6ea73",
+      "name": "Shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// rep / settings: answers with the fresh state, or the error from saving.\nconst saved = $('Save').first().json;\nconst loaded = $input.first().json;\nif (saved.error) {\n  return { \"statusCode\": 500, \"body\": { \"error\": 'Could not save: ' + String(saved.error?.message || saved.error).slice(0, 200) } };\n}\nconst action = $('Validate').first().json.action;\nif (action === 'add' && Number(saved.added) === 0) {\n  return { \"statusCode\": 409, \"body\": { \"error\": 'That owner is already in the list.', ...(loaded.body || {}) } };\n}\nif (!loaded.body) {\n  return { \"statusCode\": 500, \"body\": { \"error\": 'Saved, but the new state could not be read.' } };\n}\nreturn { \"statusCode\": 200, \"body\": loaded.body };\n"
+      }
+    },
+    {
+      "id": "50d7125b-5e4a-5606-90a2-1d10b009219a",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 200 }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save": {
+      "main": [
+        [
+          {
+            "node": "Load state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load state": {
+      "main": [
+        [
+          {
+            "node": "Shape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

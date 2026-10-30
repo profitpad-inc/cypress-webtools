@@ -1,0 +1,230 @@
+{
+  "id": "A8nmAN7FmXLTjXXu",
+  "name": "cypress-webtools: settings",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Webtool: pause or resume automatic assignment, and the skip-if-owned switch."
+  },
+  "nodes": [
+    {
+      "id": "9f7da314-ec33-5d98-b804-3760366a72de",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cypress-webtools/settings",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "0503066d-4c09-5ab9-b49f-2c5b2607cce2"
+    },
+    {
+      "id": "7ff5378b-39a9-5dc6-9c0f-f27e0bd058ce",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// settings: checks the POST body (pause, resume, skip-if-owned) and passes it on base64-encoded.\nconst clean = (v, max = 200) => String(v ?? '').trim().slice(0, max);\nconst fail = (statusCode, error) => ({ ok: false, statusCode, body: { error } });\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\nfunction validate(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const payload = {};\n  if ('paused' in b) payload.paused = b.paused === true;\n  if ('paused_until' in b) {\n    if (b.paused_until === '' || b.paused_until === null) {\n      payload.paused_until = '';\n    } else {\n      const t = Date.parse(b.paused_until);\n      if (!Number.isFinite(t)) return fail(400, \"That pause end date isn't a valid date.\");\n      payload.paused_until = new Date(t).toISOString();\n    }\n  }\n  if ('pause_reason' in b) payload.pause_reason = clean(b.pause_reason);\n  if ('skip_if_owned' in b) payload.skip_if_owned = b.skip_if_owned === true;\n  if (!Object.keys(payload).length) return fail(400, 'Nothing to change.');\n  return { ok: true, payload };\n}\n\nconst result = validate($input.first().json.body);\nif (!result.ok) return result;\nreturn { \"ok\": true, \"p\": encode(result.payload) };\n"
+      }
+    },
+    {
+      "id": "0b33b1ef-ba34-5d6d-b087-ec34350d9547",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "d400d6b1-6105-5d90-a363-71f066fe296e",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0320f6c2-3a5b-5a2e-8f58-9c3d2ef22301",
+      "name": "Save",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\nUPDATE cypress_rr_settings s SET\n  paused = CASE WHEN p.j ? 'paused' THEN (p.j->>'paused')::boolean ELSE s.paused END,\n  paused_until = CASE WHEN p.j ? 'paused_until' THEN NULLIF(p.j->>'paused_until', '')::timestamptz ELSE s.paused_until END,\n  pause_reason = CASE WHEN p.j ? 'pause_reason' THEN COALESCE(p.j->>'pause_reason', '') ELSE s.pause_reason END,\n  skip_if_owned = CASE WHEN p.j ? 'skip_if_owned' THEN (p.j->>'skip_if_owned')::boolean ELSE s.skip_if_owned END,\n  updated_at = now()\nFROM p WHERE s.id = 1\nRETURNING s.id AS changed;\n",
+        "options": {
+          "queryReplacement": "={{ $json.p }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "19f3456a-497a-592a-9481-b295457b5e5e",
+      "name": "Load state",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'reps', COALESCE((SELECT json_agg(r ORDER BY r.position, r.id) FROM cypress_rr_reps r), '[]'::json),\n  'settings', (SELECT row_to_json(s) FROM cypress_rr_settings s WHERE s.id = 1),\n  'now', now()\n) AS body;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "f947ba09-9e35-5bb1-adf8-4a0594b7befe",
+      "name": "Shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// rep / settings: answers with the fresh state, or the error from saving.\nconst saved = $('Save').first().json;\nconst loaded = $input.first().json;\nif (saved.error) {\n  return { \"statusCode\": 500, \"body\": { \"error\": 'Could not save: ' + String(saved.error?.message || saved.error).slice(0, 200) } };\n}\nconst action = $('Validate').first().json.action;\nif (action === 'add' && Number(saved.added) === 0) {\n  return { \"statusCode\": 409, \"body\": { \"error\": 'That owner is already in the list.', ...(loaded.body || {}) } };\n}\nif (!loaded.body) {\n  return { \"statusCode\": 500, \"body\": { \"error\": 'Saved, but the new state could not be read.' } };\n}\nreturn { \"statusCode\": 200, \"body\": loaded.body };\n"
+      }
+    },
+    {
+      "id": "7b93d81e-a41c-5c68-add4-eb26524ed87a",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 200 }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save": {
+      "main": [
+        [
+          {
+            "node": "Load state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load state": {
+      "main": [
+        [
+          {
+            "node": "Shape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

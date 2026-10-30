@@ -1,0 +1,397 @@
+{
+  "id": "75DXhqjVfROOi6k6",
+  "name": "cypress-webtools: rr-assign",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Round robin: every 2 minutes, assigns contacts that joined HubSpot list 276 since the last poll and records why. Writes contact owners in Cypress's live HubSpot."
+  },
+  "nodes": [
+    {
+      "id": "39c961c8-5489-5f28-9277-608761d62ef8",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "92968fb1-1654-5a72-a6be-13cffe480269",
+      "name": "Load state",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'settings', (SELECT row_to_json(s) FROM cypress_rr_settings s WHERE s.id = 1),\n  'reps', COALESCE((SELECT json_agg(r ORDER BY r.position, r.id) FROM cypress_rr_reps r), '[]'::json),\n  'recent', COALESCE((\n    SELECT json_agg(DISTINCT a.contact_id) FROM cypress_rr_assignments a, cypress_rr_settings s\n    WHERE s.id = 1 AND a.joined_list_at >= COALESCE(s.list_last_join_at, now()) - interval '1 day'\n  ), '[]'::json)\n) AS body;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      }
+    },
+    {
+      "id": "41fb70ab-e571-5da3-807b-d8d6418586c1",
+      "name": "HubSpot: list members",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "url": "={{ 'https://api.hubapi.com/crm/v3/lists/' + $json.body.settings.list_id + '/memberships/join-order?limit=250' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotApi",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "responseContainsNextURL",
+              "nextURL": "={{ $response.body.paging.next.link }}",
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.paging?.next?.link || !$('Load state').first().json.body.settings.list_initialized || Math.min(...($response.body.results || []).map((r) => Date.parse(r.membershipTimestamp))) <= new Date($('Load state').first().json.body.settings.list_last_join_at || 8.64e15).getTime() }}",
+              "limitPagesFetched": true,
+              "maxRequests": 400,
+              "requestInterval": 100
+            }
+          }
+        }
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "zeoRTe2WDma5tuVC",
+          "name": "cypress hubspot"
+        }
+      }
+    },
+    {
+      "id": "2491e31d-9b85-537e-a120-a7df93378e20",
+      "name": "Pick new members",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// rr-assign: from the list's join-order pages, the members who joined since the last poll.\n// HubSpot returns list 276's members newest first (checked 2026-10-30: 250 of 250 in descending order), so the HTTP\n// node reads from the top and stops paging once a page reaches members already seen.\n// The first poll ever only records the newest join time (baseline), so the list's history isn't assigned.\nconst MAX_PER_RUN = 100;\n\nfunction pickNew(settings, recentIds, pages) {\n  const members = [];\n  for (const page of pages) {\n    for (const r of page?.results || []) {\n      const id = String(r.recordId ?? r.id ?? '');\n      const ts = Date.parse(r.membershipTimestamp ?? r.timestamp ?? '');\n      if (id && Number.isFinite(ts)) members.push({ id, ts });\n    }\n  }\n  const newest = members.reduce((m, x) => Math.max(m, x.ts), 0);\n\n  if (!settings.list_initialized) {\n    return { baseline: true, members: [], cursor: { list_last_join_at: newest ? new Date(newest).toISOString() : '' } };\n  }\n\n  const lastJoin = settings.list_last_join_at ? Date.parse(settings.list_last_join_at) : Infinity;\n  const recent = new Set((recentIds || []).map(String));\n  const seen = new Set();\n  const fresh = members\n    .filter((m) => m.ts > lastJoin || (m.ts === lastJoin && !recent.has(m.id)))\n    .filter((m) => !seen.has(m.id) && seen.add(m.id))\n    .sort((a, b) => a.ts - b.ts);\n  // oldest first; anything past the cap is picked up next poll, since the cursor only moves to the last one taken\n  const take = fresh.slice(0, MAX_PER_RUN);\n  const takenMax = take.reduce((m, x) => Math.max(m, x.ts), 0);\n  return {\n    baseline: false,\n    members: take.map((m) => ({ id: m.id, joined_at: new Date(m.ts).toISOString() })),\n    cursor: { list_last_join_at: takenMax ? new Date(takenMax).toISOString() : '' },\n  };\n}\n\nconst state = $('Load state').first().json.body;\nconst pages = $input.all().map((item) => item.json);\nconst out = pickNew(state.settings, state.recent, pages);\nreturn {\n  \"baseline\": out.baseline,\n  \"members\": out.members,\n  \"contactIds\": out.members.map((m) => m.id).join(','),\n  \"cursor\": out.cursor,\n};\n"
+      }
+    },
+    {
+      "id": "06531744-1a95-5339-992f-59964b5a83bb",
+      "name": "Any new?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "45df4b90-da9c-5c94-aa3c-a03e9feef239",
+              "leftValue": "={{ $json.members.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f3675cb3-21dc-5489-b556-ad9f196cde71",
+      "name": "HubSpot: contacts",
+      "type": "CUSTOM.hubspotApi",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        -100
+      ],
+      "parameters": {
+        "resource": "objects",
+        "objectType": "0-1",
+        "operation": "batchRead",
+        "batchReadInputMode": "ui",
+        "batchReadObjectIds": "={{ $json.contactIds }}",
+        "batchReadReturnAllMode": "allInOne",
+        "batchReadOptions": {
+          "properties": [
+            "firstname",
+            "lastname",
+            "email",
+            "hubspot_owner_id"
+          ]
+        }
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "zeoRTe2WDma5tuVC",
+          "name": "cypress hubspot"
+        }
+      }
+    },
+    {
+      "id": "1e9015ca-e384-5484-a158-8694c7e0d737",
+      "name": "Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// rr-assign: decides each new member's owner and writes down why.\nfunction isAway(rep, now) {\n  const until = rep.away_until ? Date.parse(rep.away_until) : 0;\n  const from = rep.away_from ? Date.parse(rep.away_from) : 0;\n  return until > now && (!from || from <= now);\n}\n\nfunction startIndex(rotation, settings) {\n  const byId = rotation.findIndex((r) => r.id === settings.last_rep_id);\n  if (byId >= 0) return byId;\n  // the last rep was removed or turned off: carry on from where they sat in the order\n  const pos = Number(settings.last_position);\n  if (!Number.isFinite(pos)) return -1;\n  const next = rotation.findIndex((r) => r.position > pos);\n  return next >= 0 ? next - 1 : rotation.length - 1;\n}\n\nfunction plan({ now, settings, reps, contacts, members }) {\n  const paused = settings.paused && (!settings.paused_until || Date.parse(settings.paused_until) > now);\n  const rotation = reps.filter((r) => r.enabled).sort((a, b) => a.position - b.position || a.id - b.id);\n  const repByOwner = new Map(reps.map((r) => [String(r.hs_owner_id), r]));\n  const contactById = new Map(contacts.map((c) => [String(c.id), c]));\n  let pointer = startIndex(rotation, settings);\n  let lastRep = null;\n  const rows = [];\n  const updates = [];\n\n  for (const m of members) {\n    const c = contactById.get(String(m.id));\n    const p = c?.properties || {};\n    const owner = p.hubspot_owner_id ? String(p.hubspot_owner_id) : null;\n    const row = {\n      contact_id: String(m.id),\n      contact_name: [p.firstname, p.lastname].filter(Boolean).join(' '),\n      contact_email: p.email || '',\n      joined_list_at: m.joined_at,\n      previous_owner_id: owner,\n      owner_id: owner,\n      rep_id: null,\n      rep_name: owner && repByOwner.get(owner) ? repByOwner.get(owner).name : '',\n      skipped: [],\n    };\n\n    if (!c) {\n      rows.push({ ...row, status: 'error', reason: 'The contact could not be read from HubSpot (it may have been deleted or merged).' });\n      continue;\n    }\n    if (paused) {\n      const why = settings.pause_reason ? ` (${settings.pause_reason})` : '';\n      rows.push({ ...row, status: 'paused', reason: `Automatic assignment was paused${why}, so the lead was left as it was.` });\n      continue;\n    }\n    if (settings.skip_if_owned && owner) {\n      rows.push({ ...row, status: 'kept_existing', reason: 'The contact already had an owner, so it was left with them.' });\n      continue;\n    }\n\n    let chosen = null;\n    const skipped = [];\n    for (let step = 1; step <= rotation.length; step++) {\n      const idx = (pointer + step + rotation.length) % rotation.length;\n      const rep = rotation[idx];\n      if (isAway(rep, now)) {\n        skipped.push({ rep_id: rep.id, name: rep.name, away_until: rep.away_until, away_reason: rep.away_reason || '' });\n        continue;\n      }\n      chosen = { rep, idx };\n      break;\n    }\n\n    if (!chosen) {\n      rows.push({\n        ...row,\n        skipped,\n        status: 'no_reps',\n        reason: rotation.length\n          ? 'Every rep in the rotation is out of office, so the lead was left unassigned.'\n          : 'No reps are turned on in the rotation, so the lead was left unassigned.',\n      });\n      continue;\n    }\n\n    pointer = chosen.idx;\n    lastRep = chosen.rep;\n    const parts = ['Next in the rotation'];\n    if (skipped.length) {\n      parts.push(`skipped ${skipped.map((s) => `${s.name} (out of office${s.away_reason ? ': ' + s.away_reason : ''})`).join(', ')}`);\n    }\n    if (owner && owner !== String(chosen.rep.hs_owner_id)) {\n      const prev = repByOwner.get(owner);\n      parts.push(`replaced the previous owner${prev ? ' ' + prev.name : ''}`);\n    }\n    rows.push({\n      ...row,\n      owner_id: String(chosen.rep.hs_owner_id),\n      rep_id: chosen.rep.id,\n      rep_name: chosen.rep.name,\n      skipped,\n      status: 'assigned',\n      reason: parts.join(', ') + '.',\n    });\n    updates.push({ id: String(m.id), properties: { hubspot_owner_id: String(chosen.rep.hs_owner_id) } });\n  }\n\n  return {\n    rows,\n    updates,\n    last_rep_id: lastRep ? lastRep.id : null,\n    last_position: lastRep ? lastRep.position : null,\n  };\n}\n\nconst state = $('Load state').first().json.body;\nconst pick = $('Pick new members').first().json;\nconst read = $input.first().json;\nconst out = plan({\n  now: Date.now(),\n  settings: state.settings,\n  reps: state.reps || [],\n  contacts: read.results || [],\n  members: pick.members || [],\n});\nreturn {\n  \"rows\": out.rows,\n  \"updates\": out.updates,\n  \"last_rep_id\": out.last_rep_id,\n  \"last_position\": out.last_position,\n  \"hasUpdates\": out.updates.length > 0,\n};\n"
+      }
+    },
+    {
+      "id": "a7c0e93e-c575-5c2f-bcad-9a0e28ffbe9b",
+      "name": "Owners to set?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "f3c60b1e-79d7-5b7c-8694-b5f7a4fc6711",
+              "leftValue": "={{ $json.hasUpdates }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d3416388-4cb6-5d68-a724-e6e35c697ec2",
+      "name": "HubSpot: set owners",
+      "type": "CUSTOM.hubspotApi",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        -200
+      ],
+      "parameters": {
+        "resource": "objects",
+        "objectType": "0-1",
+        "operation": "batchUpdate",
+        "batchUpdateBody": "={{ JSON.stringify({ inputs: $json.updates }) }}"
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "zeoRTe2WDma5tuVC",
+          "name": "cypress hubspot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "2e09de20-b644-5c2d-a066-1addaaf818b8",
+      "name": "Finalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// rr-assign: puts together what gets saved. If HubSpot refused the owner change, those rows become errors and the\n// rotation doesn't move, so the same reps are first in line next time.\nconst encode = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\nfunction finalize(pick, planned, hubspot) {\n  if (!planned) {\n    return { rows: [], cursor: pick.cursor, last_rep_id: null, last_position: null, error: '' };\n  }\n  let error = '';\n  if (hubspot) {\n    const res = hubspot.json || {};\n    const failed = res.error || (Array.isArray(res.errors) && res.errors.length) || res.status === 'error';\n    if (failed) error = String(res.error?.message || res.error || res.message || 'HubSpot refused the owner change').slice(0, 300);\n  }\n  if (!error) return { rows: planned.rows, cursor: pick.cursor, last_rep_id: planned.last_rep_id, last_position: planned.last_position, error };\n  const rows = planned.rows.map((r) => (r.status === 'assigned'\n    ? { ...r, status: 'error', owner_id: r.previous_owner_id, reason: `Would have gone to ${r.rep_name}, but HubSpot refused the owner change: ${error}` }\n    : r));\n  return { rows, cursor: pick.cursor, last_rep_id: null, last_position: null, error };\n}\n\nconst pick = $('Pick new members').first().json;\nconst planned = $('Plan').isExecuted ? $('Plan').first().json : null;\nconst hubspot = $('HubSpot: set owners').isExecuted ? $('HubSpot: set owners').first() : null;\nconst out = finalize(pick, planned, hubspot);\nreturn {\n  \"count\": out.rows.length,\n  \"error\": out.error,\n  \"p\": encode(out),\n};\n"
+      }
+    },
+    {
+      "id": "c4729fca-cfe8-5986-b711-c3a6df402861",
+      "name": "Save",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2400,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\nins AS (\n  INSERT INTO cypress_rr_assignments (contact_id, contact_name, contact_email, joined_list_at, previous_owner_id,\n    owner_id, rep_id, rep_name, status, reason, skipped)\n  SELECT x->>'contact_id', COALESCE(x->>'contact_name', ''), COALESCE(x->>'contact_email', ''),\n    NULLIF(x->>'joined_list_at', '')::timestamptz, x->>'previous_owner_id', x->>'owner_id',\n    NULLIF(x->>'rep_id', '')::int, COALESCE(x->>'rep_name', ''), x->>'status', COALESCE(x->>'reason', ''),\n    COALESCE(x->'skipped', '[]'::jsonb)\n  FROM p, jsonb_array_elements(p.j->'rows') x\n  ON CONFLICT (contact_id, joined_list_at) DO NOTHING\n  RETURNING id\n),\nst AS (\n  UPDATE cypress_rr_settings s SET\n    list_last_join_at = COALESCE(NULLIF(p.j->'cursor'->>'list_last_join_at', '')::timestamptz, s.list_last_join_at),\n    list_initialized = true,\n    last_rep_id = COALESCE(NULLIF(p.j->>'last_rep_id', '')::int, s.last_rep_id),\n    last_position = COALESCE(NULLIF(p.j->>'last_position', '')::int, s.last_position),\n    last_poll_at = now(),\n    last_poll_error = COALESCE(p.j->>'error', '')\n  FROM p WHERE s.id = 1\n  RETURNING s.id\n)\nSELECT (SELECT count(*) FROM ins) AS inserted, (SELECT count(*) FROM st) AS settings_updated;\n",
+        "options": {
+          "queryReplacement": "={{ $json.p }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Load state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load state": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: list members",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: list members": {
+      "main": [
+        [
+          {
+            "node": "Pick new members",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick new members": {
+      "main": [
+        [
+          {
+            "node": "Any new?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any new?": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: contacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: contacts": {
+      "main": [
+        [
+          {
+            "node": "Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan": {
+      "main": [
+        [
+          {
+            "node": "Owners to set?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Owners to set?": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: set owners",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: set owners": {
+      "main": [
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize": {
+      "main": [
+        [
+          {
+            "node": "Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

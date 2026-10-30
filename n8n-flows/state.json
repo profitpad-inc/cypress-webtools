@@ -1,0 +1,94 @@
+{
+  "id": "zZ3bBMrc92hANtCy",
+  "name": "cypress-webtools: state",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Webtool: the reps in the rotation and the settings."
+  },
+  "nodes": [
+    {
+      "id": "c7c25d7c-041b-5e10-898c-8e4432627200",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "path": "cypress-webtools/state",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "031e2cdb-ddbb-5873-8d4f-77588cb2529d"
+    },
+    {
+      "id": "3e3ede0e-e8de-5ad9-88e4-d2e22639b9c5",
+      "name": "Load state",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'reps', COALESCE((SELECT json_agg(r ORDER BY r.position, r.id) FROM cypress_rr_reps r), '[]'::json),\n  'settings', (SELECT row_to_json(s) FROM cypress_rr_settings s WHERE s.id = 1),\n  'now', now()\n) AS body;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "0STT9QiFVsbUyNQG",
+          "name": "demo_db"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "aecefe92-6f10-50bc-b94f-aa0f812bfa66",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body || { error: 'Database error: ' + String($json.error?.message || $json.error || 'no result') }) }}",
+        "options": {
+          "responseCode": "={{ $json.body ? 200 : 500 }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load state": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
