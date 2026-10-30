@@ -40,7 +40,7 @@ never reverted; **no sign-in** for the demo.
 
 ```
 cypress-webtools/
-  CLAUDE.md, AGENTS.md, HANDOFF.md
+  CLAUDE.md, AGENTS.md, HANDOFF.md, README.md
   archive/round_robin_zap.json   the Zapier round robin being replaced
   flows_src/                     Code node JavaScript (*.js) and SQL (*.sql) used by the flows
   build_flows.py                 wires flows_src/ into n8n-flows/*.json (deterministic node ids)
@@ -70,11 +70,10 @@ Request node as predefined type `hubspotApi`), Postgres `0STT9QiFVsbUyNQG` (`dem
 | `owners` | `1E3bp2djD6QQhonZ` | GET `owners` | `{owners: [{id, userId, name, email}]}`, active HubSpot owners |
 | `rep` | `wbBQvvOlRLw4IULs` | POST `rep` | `{action: add, hs_owner_id, hs_user_id, name, email, meeting_link}`, `{action: update, id, meeting_link?, enabled?, away_from?, away_until?, away_reason?, boost_remaining? (0 to 100)}` (empty string clears), `{action: remove, id}`, `{action: order, order: [ids]}`. Answers the new state; 400 bad input, 409 owner already listed |
 | `settings` | `A8nmAN7FmXLTjXXu` | POST `settings` | `{paused?, paused_until?, pause_reason?, skip_if_owned?}`. Answers the new state |
-| `report` | `pr9qZ5ozedhSTkxn` | GET `report?from&to&tz` | Assignments created in the range (each with its `overwrites`), overwrites that happened in the range, booking link visits, reps, settings. Range max 92 days |
+| `report` | `pr9qZ5ozedhSTkxn` | GET `report?from&to&tz` | `leads` created in the range (list and booking, each with its `changes`), `owner_changes` in the range, `visits` (a booked one with its lead), reps, settings. Range max 92 days |
 | `book` | `LA5IQQSRKyw5fafT` | GET `book?email=` or `?cid=` | Universal booking link (§7.1). Answers `{url, rep_name, route}`, or 503 `{error}` when nobody is available. Logs the visit only: never moves the rotation or uses a boost. Reads HubSpot only |
 | `rr-assign` | `75DXhqjVfROOi6k6` | every 2 min | See §5 |
-| `book` | **Live and tested** 2026-10-30: no email went to the rotation, `jeffb@cypressvending.ca` (a HubSpot contact owned by Graham) went to Graham's link. The two test rows were deleted and the pointer put back on Matt A |
-| `rr-watch-overwrites` | `B1iPRK3B9hhbCnqv` | every 5 min | Latest assignment per contact in the last 30 days (assigned or kept), batch-reads `hubspot_owner_id` with history, records each change after the assignment time (from, to, `sourceType`, `sourceId`, `sourceLabel`, `updatedByUserId`). Second branch: **booked visits** (§7.1). Changes nothing in HubSpot |
+| `rr-watch-overwrites` | `B1iPRK3B9hhbCnqv` | every 5 min, or POST `watch-now` | Latest lead per contact in the last 30 days (assigned or kept), batch-reads `hubspot_owner_id` with history plus the name, records each owner change after the lead (from, to, `sourceType`, `sourceId`, `sourceLabel`, `updatedByUserId`) and keeps lead names in step with HubSpot. Second branch: **booked visits** become leads (§7.1, §6). Changes nothing in HubSpot |
 | `setup-db` | `WdkXyPiTf7DBHOEo` | POST `setup-db` | `flows_src/setup.sql`, idempotent. Unpublished |
 
 Postgres parameters are passed as one base64 JSON string (`convert_from(decode($1, 'base64'), 'UTF8')::jsonb`), so
